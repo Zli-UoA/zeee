@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { Button, Input, Sidebar, Text, useSidebar } from '@cloudflare/kumo';
-import { FilesIcon, ListIcon, PlusIcon, SignOutIcon } from '@phosphor-icons/react';
+import { ListIcon, PlusIcon, SignOutIcon } from '@phosphor-icons/react';
 import type { PageSummary, SessionUser } from '../server/types';
 
 type Props = {
@@ -58,7 +58,7 @@ export function AppShell({ user, pages, activePageId, activeTitle, query, childr
     <Sidebar.Provider collapsible="offcanvas" className="min-h-svh bg-kumo-canvas">
       <SkipToContent />
       <Sidebar id="pages-nav" className="md:sticky md:top-0 md:h-svh">
-        <Sidebar.Header className="h-14 justify-between px-4">
+        <Sidebar.Header className="h-14 justify-between px-3.5">
           <Brand />
           <Sidebar.Close className="size-8 md:hidden" aria-label="ページ一覧を閉じる" />
         </Sidebar.Header>
@@ -68,7 +68,7 @@ export function AppShell({ user, pages, activePageId, activeTitle, query, childr
             method="post"
             action="/"
             aria-label="新しいページ"
-            className="mb-5 flex flex-col gap-2 px-1"
+            className="mb-5 flex flex-col gap-2"
           >
             <Input
               name="title"
@@ -94,7 +94,6 @@ export function AppShell({ user, pages, activePageId, activeTitle, query, childr
                 href="/"
                 active={!activePageId}
                 aria-current={!activePageId ? 'page' : undefined}
-                icon={<FilesIcon size={16} />}
               >
                 すべてのページ
               </Sidebar.MenuButton>
@@ -216,7 +215,7 @@ function MobileNavButton() {
       aria-controls="pages-nav"
       aria-expanded={openMobile}
       onClick={() => setOpenMobile(true)}
-      className="-ml-1 size-9 md:hidden"
+      className="size-9 md:hidden"
     >
       <ListIcon size={18} />
     </Button>

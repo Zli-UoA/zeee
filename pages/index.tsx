@@ -39,6 +39,7 @@ export default function Home({ user, pages, query, results, loginUrl }: Props) {
               type="submit"
               variant="secondary"
               icon={<MagnifyingGlassIcon size={15} />}
+              shape="square"
               aria-label="検索"
             />
           </form>
