@@ -40,9 +40,7 @@
     "migrations": [
       {
         "tag": "void-durable-page-room-v1",
-        "new_sqlite_classes": [
-          "PageRoomDurableObject"
-        ]
+        "new_sqlite_classes": ["PageRoomDurableObject"]
       }
     ]
   },
