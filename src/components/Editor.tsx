@@ -280,77 +280,76 @@ export function Editor({ page, user, revisions }: Props) {
         </LayerCard>
 
         {historyOpen ? (
-          <div
-            ref={historyRef}
-            className="scroll-mt-20 self-start xl:sticky xl:top-20 xl:max-h-[calc(100vh-6rem)] xl:overflow-y-auto"
-          >
+          <div ref={historyRef} className="scroll-mt-20 self-start xl:sticky xl:top-20">
             <LayerCard className="overflow-hidden p-0">
-              <div className="flex items-center justify-between border-b border-kumo-line px-3 py-2">
-                <div className="flex items-center gap-2">
-                  <Text variant="heading" as="h2">
-                    履歴
-                  </Text>
-                  <Badge variant="outline">{revisions.length}</Badge>
+              <div className="xl:max-h-[calc(100vh-6rem)] xl:overflow-y-auto">
+                <div className="flex items-center justify-between px-3 pt-2">
+                  <div className="flex items-center gap-2">
+                    <Text variant="heading" as="h2">
+                      履歴
+                    </Text>
+                    <Badge variant="outline">{revisions.length}</Badge>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    shape="square"
+                    aria-label="履歴を閉じる"
+                    onClick={() => setHistoryOpen(false)}
+                  >
+                    <XIcon size={16} />
+                  </Button>
                 </div>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  shape="square"
-                  aria-label="履歴を閉じる"
-                  onClick={() => setHistoryOpen(false)}
-                >
-                  <XIcon size={16} />
-                </Button>
-              </div>
 
-              <div className="border-b border-kumo-line p-3">
-                <Button
-                  type="button"
-                  variant="secondary"
-                  icon={<FloppyDiskIcon size={15} />}
-                  onClick={saveRevision}
-                  disabled={busy}
-                  className="w-full"
-                >
-                  現在の版を保存
-                </Button>
-              </div>
+                <div className="border-b border-kumo-line p-3">
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    icon={<FloppyDiskIcon size={15} />}
+                    onClick={saveRevision}
+                    disabled={busy}
+                    className="w-full"
+                  >
+                    現在の版を保存
+                  </Button>
+                </div>
 
-              {revisions.length === 0 ? (
-                <Empty
-                  size="sm"
-                  icon={<ClockCounterClockwiseIcon size={28} />}
-                  title="履歴はまだありません"
-                  description="編集内容は自動で保存されます。"
-                />
-              ) : (
-                <ul className="divide-y divide-kumo-line">
-                  {revisions.map((revision) => (
-                    <li
-                      className="flex items-start justify-between gap-2 px-3 py-2"
-                      key={revision.id}
-                    >
-                      <div className="flex min-w-0 flex-col gap-0.5">
-                        <div className="flex items-center gap-1.5">
-                          <Text variant="mono">v{revision.version}</Text>
-                          {revision.manual ? <Badge variant="outline">手動</Badge> : null}
-                        </div>
-                        <Text variant="mono-secondary">{formatDate(revision.createdAt)}</Text>
-                      </div>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        icon={<ArrowCounterClockwiseIcon size={15} />}
-                        onClick={() => restore(revision.version)}
-                        disabled={busy}
-                        aria-label={`v${revision.version} に戻す`}
+                {revisions.length === 0 ? (
+                  <Empty
+                    size="sm"
+                    icon={<ClockCounterClockwiseIcon size={28} />}
+                    title="履歴はまだありません"
+                    description="編集内容は自動で保存されます。"
+                  />
+                ) : (
+                  <ul className="divide-y divide-kumo-line">
+                    {revisions.map((revision) => (
+                      <li
+                        className="flex items-start justify-between gap-2 px-3 py-2"
+                        key={revision.id}
                       >
-                        戻す
-                      </Button>
-                    </li>
-                  ))}
-                </ul>
-              )}
+                        <div className="flex min-w-0 flex-col gap-0.5">
+                          <div className="flex items-center gap-1.5">
+                            <Text variant="mono">v{revision.version}</Text>
+                            {revision.manual ? <Badge variant="outline">手動</Badge> : null}
+                          </div>
+                          <Text variant="mono-secondary">{formatDate(revision.createdAt)}</Text>
+                        </div>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          icon={<ArrowCounterClockwiseIcon size={15} />}
+                          onClick={() => restore(revision.version)}
+                          disabled={busy}
+                          aria-label={`v${revision.version} に戻す`}
+                        >
+                          戻す
+                        </Button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
             </LayerCard>
           </div>
         ) : null}
