@@ -4,6 +4,15 @@ import { Awareness } from 'y-protocols/awareness';
 import { EditorView, basicSetup } from 'codemirror';
 import { markdown } from '@codemirror/lang-markdown';
 import { yCollab } from 'y-codemirror.next';
+import { Badge, Button, DropdownMenu, Empty, Input, LayerCard, Text } from '@cloudflare/kumo';
+import {
+  ArrowCounterClockwiseIcon,
+  ClockCounterClockwiseIcon,
+  DotsThreeIcon,
+  FloppyDiskIcon,
+  TrashIcon,
+  XIcon,
+} from '@phosphor-icons/react';
 import { ZeeeProvider, type Collaborator, type ConnectionStatus } from '../client/provider';
 import type { PageRecord, RevisionRecord, SessionUser } from '../server/types';
 import { formatDate } from '../shared/format';
@@ -14,12 +23,40 @@ type Props = {
   revisions: RevisionRecord[];
 };
 
+const editorTheme = EditorView.theme({
+  '&': {
+    backgroundColor: 'transparent',
+    color: 'var(--text-color-kumo-default)',
+  },
+  '.cm-content': {
+    caretColor: 'var(--color-kumo-brand)',
+    fontFamily: 'ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace',
+    fontSize: '15px',
+    lineHeight: '1.9',
+  },
+  '.cm-line': {
+    padding: '0 0.15rem',
+  },
+  '.cm-gutters': {
+    display: 'none',
+  },
+  '.cm-activeLine': {
+    backgroundColor: 'color-mix(in oklab, var(--color-kumo-contrast) 4%, transparent)',
+  },
+  '.cm-selectionBackground, ::selection': {
+    backgroundColor: 'color-mix(in oklab, var(--color-kumo-brand) 22%, transparent) !important',
+  },
+});
+
 export function Editor({ page, user, revisions }: Props) {
   const editorRef = useRef<HTMLDivElement>(null);
+  const historyRef = useRef<HTMLDivElement>(null);
   const [title, setTitle] = useState(page.title);
+  const [savedTitle, setSavedTitle] = useState(page.title);
   const [status, setStatus] = useState<ConnectionStatus>('connecting');
   const [users, setUsers] = useState<Collaborator[]>([]);
   const [busy, setBusy] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const [error, setError] = useState('');
 
   useEffect(() => {
@@ -50,7 +87,14 @@ export function Editor({ page, user, revisions }: Props) {
 
         const view = new EditorView({
           doc: text.toJSON(),
-          extensions: [basicSetup, markdown(), EditorView.lineWrapping, yCollab(text, awareness)],
+          extensions: [
+            basicSetup,
+            markdown(),
+            EditorView.lineWrapping,
+            EditorView.contentAttributes.of({ 'aria-label': '本文' }),
+            editorTheme,
+            yCollab(text, awareness),
+          ],
           parent: editorRef.current,
         });
         const provider = new ZeeeProvider(page.id, doc, awareness, seed, setStatus, setUsers);
@@ -73,17 +117,42 @@ export function Editor({ page, user, revisions }: Props) {
     };
   }, [page.id]);
 
-  async function saveTitle(event: React.FormEvent) {
-    event.preventDefault();
-    setBusy(true);
+  useEffect(() => {
+    if (!historyOpen) return;
+    if (window.matchMedia('(max-width: 1279px)').matches) {
+      historyRef.current?.scrollIntoView({
+        behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches
+          ? 'instant'
+          : 'smooth',
+        block: 'start',
+      });
+    }
+  }, [historyOpen]);
+
+  async function saveTitle() {
+    const next = title.trim();
+    if (!next) {
+      setTitle(savedTitle);
+      return;
+    }
+    if (next === savedTitle) return;
+
     setError('');
     const response = await fetch(`/api/pages/${page.id}`, {
       method: 'PATCH',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ title }),
+      body: JSON.stringify({ title: next }),
+      keepalive: true,
     });
-    if (!response.ok) setError('タイトルを保存できませんでした');
-    setBusy(false);
+    if (!response.ok) {
+      setError('タイトルを保存できませんでした');
+      return;
+    }
+    setTitle(next);
+    setSavedTitle(next);
+    window.dispatchEvent(
+      new CustomEvent('zeee:page-renamed', { detail: { id: page.id, title: next } }),
+    );
   }
 
   async function saveRevision() {
@@ -116,7 +185,7 @@ export function Editor({ page, user, revisions }: Props) {
   }
 
   async function remove() {
-    if (!window.confirm('このページを削除しますか？')) return;
+    if (!window.confirm('このページと履歴を削除します。元に戻せません。')) return;
     setBusy(true);
     const response = await fetch(`/api/pages/${page.id}`, { method: 'DELETE' });
     if (!response.ok) {
@@ -127,67 +196,164 @@ export function Editor({ page, user, revisions }: Props) {
     window.location.href = '/';
   }
 
+  const others = users.filter((item) => item.name !== user.displayName);
+
   return (
-    <div className="editor-shell">
-      <section className="editor-main">
-        <form className="editor-toolbar" onSubmit={saveTitle}>
-          <input
-            className="title-input"
-            value={title}
-            onChange={(event) => setTitle(event.target.value)}
-            aria-label="タイトル"
-          />
-          <button type="submit" disabled={busy}>
-            タイトル保存
-          </button>
-          <span className={`connection connection-${status}`}>{statusLabel(status)}</span>
-          <span className="collaborators" aria-label="編集中のメンバー">
-            {users.map((item) => (
-              <span className="collaborator" key={`${item.name}-${item.color}`}>
-                <i style={{ background: item.color }} />
-                {item.name}
-              </span>
-            ))}
-          </span>
-          <button type="button" onClick={saveRevision} disabled={busy}>
-            版を保存
-          </button>
-          <button type="button" className="danger" onClick={remove} disabled={busy}>
-            削除
-          </button>
-        </form>
+    <div className="flex w-full flex-col gap-4">
+      <div className="flex flex-col gap-3">
+        <Input
+          value={title}
+          onChange={(event) => setTitle(event.target.value)}
+          onBlur={() => void saveTitle()}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') {
+              event.preventDefault();
+              event.currentTarget.blur();
+            }
+          }}
+          aria-label="タイトル"
+          enterKeyHint="done"
+          size="lg"
+          className="w-full border-0 bg-transparent px-0 py-0 text-2xl font-semibold shadow-none ring-0 focus:ring-2 focus:ring-kumo-focus/40"
+        />
 
-        {error ? <p className="error">{error}</p> : null}
-        <div className="editor" ref={editorRef} />
-        <p className="hint">
-          Markdown をそのまま共同編集します。変更は自動保存され、10 分ごとに履歴が残ります。
-        </p>
-      </section>
+        <div className="flex flex-wrap items-center gap-2">
+          {status !== 'connected' ? (
+            <Badge appearance="dot" variant={badgeForStatus(status)} aria-live="polite">
+              {statusLabel(status)}
+            </Badge>
+          ) : null}
+          {others.map((item) => (
+            <Badge variant="neutral" key={`${item.name}-${item.color}`}>
+              {item.name}
+            </Badge>
+          ))}
 
-      <aside className="history">
-        <div className="history-head">
-          <h2>履歴</h2>
-          <span>{revisions.length}</span>
+          <div className="ml-auto flex items-center gap-1">
+            <Button
+              type="button"
+              variant="secondary"
+              icon={<ClockCounterClockwiseIcon size={15} />}
+              onClick={() => setHistoryOpen((open) => !open)}
+              aria-pressed={historyOpen}
+            >
+              履歴
+            </Button>
+            <DropdownMenu>
+              <DropdownMenu.Trigger
+                render={
+                  <Button type="button" variant="ghost" shape="square" aria-label="ページメニュー">
+                    <DotsThreeIcon size={18} />
+                  </Button>
+                }
+              />
+              <DropdownMenu.Content>
+                <DropdownMenu.Item
+                  variant="danger"
+                  icon={<TrashIcon size={16} />}
+                  onClick={() => void remove()}
+                  disabled={busy}
+                >
+                  ページを削除
+                </DropdownMenu.Item>
+              </DropdownMenu.Content>
+            </DropdownMenu>
+          </div>
         </div>
-        {revisions.length === 0 ? (
-          <p className="empty">まだ履歴はありません。</p>
-        ) : (
-          <ol>
-            {revisions.map((revision) => (
-              <li key={revision.id}>
-                <div>
-                  <strong>v{revision.version}</strong>
-                  <span className="badge">{revision.manual ? '手動' : '自動'}</span>
+      </div>
+
+      {error ? (
+        <Text variant="error" size="sm">
+          {error}
+        </Text>
+      ) : null}
+
+      <div
+        className={
+          historyOpen
+            ? 'grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_280px]'
+            : 'grid grid-cols-1 gap-4'
+        }
+      >
+        <LayerCard className="overflow-hidden p-0">
+          <div className="min-h-[60svh] lg:min-h-[calc(100vh-18rem)]" ref={editorRef} />
+        </LayerCard>
+
+        {historyOpen ? (
+          <div ref={historyRef} className="scroll-mt-20 self-start xl:sticky xl:top-20">
+            <LayerCard className="overflow-hidden p-0">
+              <div className="xl:max-h-[calc(100vh-6rem)] xl:overflow-y-auto">
+                <div className="flex items-center justify-between px-3 pt-2">
+                  <div className="flex items-center gap-2">
+                    <Text variant="heading" as="h2">
+                      履歴
+                    </Text>
+                    <Badge variant="outline">{revisions.length}</Badge>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    shape="square"
+                    aria-label="履歴を閉じる"
+                    onClick={() => setHistoryOpen(false)}
+                  >
+                    <XIcon size={16} />
+                  </Button>
                 </div>
-                <time>{formatDate(revision.createdAt)}</time>
-                <button type="button" onClick={() => restore(revision.version)} disabled={busy}>
-                  この版に戻す
-                </button>
-              </li>
-            ))}
-          </ol>
-        )}
-      </aside>
+
+                <div className="border-b border-kumo-line p-3">
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    icon={<FloppyDiskIcon size={15} />}
+                    onClick={saveRevision}
+                    disabled={busy}
+                    className="w-full"
+                  >
+                    現在の版を保存
+                  </Button>
+                </div>
+
+                {revisions.length === 0 ? (
+                  <Empty
+                    size="sm"
+                    icon={<ClockCounterClockwiseIcon size={28} />}
+                    title="履歴はまだありません"
+                    description="編集内容は自動で保存されます。"
+                  />
+                ) : (
+                  <ul className="divide-y divide-kumo-line">
+                    {revisions.map((revision) => (
+                      <li
+                        className="flex items-start justify-between gap-2 px-3 py-2"
+                        key={revision.id}
+                      >
+                        <div className="flex min-w-0 flex-col gap-0.5">
+                          <div className="flex items-center gap-1.5">
+                            <Text variant="mono">v{revision.version}</Text>
+                            {revision.manual ? <Badge variant="outline">手動</Badge> : null}
+                          </div>
+                          <Text variant="mono-secondary">{formatDate(revision.createdAt)}</Text>
+                        </div>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          icon={<ArrowCounterClockwiseIcon size={15} />}
+                          onClick={() => restore(revision.version)}
+                          disabled={busy}
+                          aria-label={`v${revision.version} に戻す`}
+                        >
+                          戻す
+                        </Button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            </LayerCard>
+          </div>
+        ) : null}
+      </div>
     </div>
   );
 }
@@ -198,8 +364,14 @@ function statusLabel(status: ConnectionStatus): string {
   return '接続中';
 }
 
+function badgeForStatus(status: ConnectionStatus): 'success' | 'warning' | 'neutral' {
+  if (status === 'connected') return 'success';
+  if (status === 'reconnecting') return 'warning';
+  return 'neutral';
+}
+
 function colorFor(name: string): string {
   let hash = 0;
   for (const character of name) hash = (hash * 31 + (character.codePointAt(0) ?? 0)) % 360;
-  return `hsl(${hash} 72% 42%)`;
+  return `hsl(${hash} 58% 38%)`;
 }

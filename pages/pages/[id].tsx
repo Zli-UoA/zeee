@@ -1,37 +1,26 @@
 import type { Props } from './[id].server';
+import { AppShell } from '../../src/components/AppShell';
 import { Editor } from '../../src/components/Editor';
+import { Gate } from '../../src/components/Gate';
 
-export default function PageView({ user, page, revisions, loginUrl }: Props) {
-  if (!user) {
-    return (
-      <div className="centered">
-        <h1>ログインが必要です</h1>
-        <p>ページを開くにはログインしてください。</p>
-        <a className="button primary" href={loginUrl}>
-          ログイン
-        </a>
-      </div>
-    );
-  }
-
-  if (!page) {
-    return (
-      <div className="centered">
-        <h1>ページがありません</h1>
-        <p>削除されたか、URL が違う可能性があります。</p>
-        <a className="button" href="/">
-          ページ一覧へ
-        </a>
-      </div>
-    );
-  }
-
+export default function PageView({ user, page, revisions, pages, loginUrl }: Props) {
   return (
-    <div className="page-view">
-      <a className="back" href="/">
-        ← ページ一覧
-      </a>
-      <Editor page={page} user={user} revisions={revisions} />
-    </div>
+    <AppShell user={user} pages={pages} activePageId={page?.id} activeTitle={page?.title}>
+      {!user ? (
+        <Gate
+          title="ログインが必要です"
+          description="Zeee は Zli のメンバーだけが使える知識ベース。"
+          action={{ href: loginUrl, label: 'AuthZ でログイン' }}
+        />
+      ) : !page ? (
+        <Gate
+          title="ページがない"
+          description="削除されたか、URL が違うかもしれない。"
+          action={{ href: '/', label: 'ページ一覧へ戻る' }}
+        />
+      ) : (
+        <Editor page={page} user={user} revisions={revisions} />
+      )}
+    </AppShell>
   );
 }

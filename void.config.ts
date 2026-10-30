@@ -2,6 +2,15 @@ import { defineConfig } from 'void/config';
 
 export default defineConfig({
   target: 'cloudflare',
+  head: {
+    title: 'Zeee',
+    htmlAttrs: { lang: 'ja' },
+    meta: [
+      { charset: 'utf-8' },
+      { name: 'viewport', content: 'width=device-width, initial-scale=1' },
+      { name: 'color-scheme', content: 'light' },
+    ],
+  },
   cloudflare: {
     name: 'zeee',
     vars: {

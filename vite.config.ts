@@ -1,3 +1,4 @@
+import tailwindcss from '@tailwindcss/vite';
 import { defineConfig } from 'vite-plus';
 import { voidPlugin } from 'void';
 import { voidReact } from '@void/react/plugin';
@@ -21,6 +22,8 @@ export default defineConfig(({ mode }) => {
       environment: 'node',
       include: ['tests/**/*.test.ts'],
     },
-    plugins: lazyPlugins(() => (testing ? [] : [voidPlugin(), voidReact(), voidCelld()])),
+    plugins: lazyPlugins(() =>
+      testing ? [] : [tailwindcss(), voidPlugin(), voidReact(), voidCelld()],
+    ),
   };
 });
