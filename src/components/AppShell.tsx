@@ -42,8 +42,8 @@ export function AppShell({ user, pages, activePageId, activeTitle, query, childr
     return (
       <div className="min-h-svh bg-kumo-canvas text-kumo-default">
         <SkipToContent />
-        <header className="border-b border-kumo-line bg-kumo-base">
-          <div className="mx-auto flex h-14 max-w-6xl items-center px-4 sm:px-6">
+        <header className="h-14 border-b border-kumo-line bg-kumo-base">
+          <div className="mx-auto flex h-full max-w-6xl items-center px-4 sm:px-6">
             <Brand />
           </div>
         </header>
@@ -122,8 +122,8 @@ export function AppShell({ user, pages, activePageId, activeTitle, query, childr
       </Sidebar>
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="sticky top-0 z-30 border-b border-kumo-line bg-kumo-base/90 backdrop-blur">
-          <div className="flex h-14 items-center gap-2 px-3 sm:px-5 lg:px-6">
+        <header className="sticky top-0 z-30 h-14 border-b border-kumo-line bg-kumo-base/90 backdrop-blur">
+          <div className="flex h-full items-center gap-2 px-3 sm:px-5 lg:px-6">
             <MobileNavButton />
 
             <div className="min-w-0 md:hidden">
