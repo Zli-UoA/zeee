@@ -4,6 +4,8 @@ import { Awareness } from 'y-protocols/awareness';
 import { EditorView, basicSetup } from 'codemirror';
 import { markdown } from '@codemirror/lang-markdown';
 import { yCollab } from 'y-codemirror.next';
+import { Badge, Button, Empty, Input, LayerCard, Text } from '@cloudflare/kumo';
+import { ClockCounterClockwiseIcon, FloppyDiskIcon, TrashIcon } from '@phosphor-icons/react';
 import { ZeeeProvider, type Collaborator, type ConnectionStatus } from '../client/provider';
 import type { PageRecord, RevisionRecord, SessionUser } from '../server/types';
 import { formatDate } from '../shared/format';
@@ -17,26 +19,26 @@ type Props = {
 const editorTheme = EditorView.theme({
   '&': {
     backgroundColor: 'transparent',
-    color: 'var(--ink)',
+    color: 'var(--text-color-kumo-default)',
   },
   '.cm-content': {
-    caretColor: 'var(--accent)',
-    fontFamily: 'var(--font-mono)',
-    fontSize: '0.95rem',
-    lineHeight: '1.9',
-    padding: '0.8rem 0',
+    caretColor: 'var(--color-kumo-brand)',
+    fontFamily: 'ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace',
+    fontSize: '14px',
+    lineHeight: '1.8',
+    padding: '1.25rem 1.5rem',
   },
   '.cm-line': {
-    padding: '0 0.2rem',
+    padding: '0 0.15rem',
   },
   '.cm-gutters': {
     display: 'none',
   },
   '.cm-activeLine': {
-    backgroundColor: 'color-mix(in srgb, var(--accent) 5%, transparent)',
+    backgroundColor: 'color-mix(in oklab, var(--color-kumo-contrast) 4%, transparent)',
   },
   '.cm-selectionBackground, ::selection': {
-    backgroundColor: 'color-mix(in srgb, var(--accent) 18%, transparent) !important',
+    backgroundColor: 'color-mix(in oklab, var(--color-kumo-brand) 22%, transparent) !important',
   },
 });
 
@@ -168,86 +170,117 @@ export function Editor({ page, user, revisions }: Props) {
   }
 
   return (
-    <div className="editor-shell">
-      <section className="editor-main">
-        <form className="editor-head" onSubmit={saveTitle}>
-          <div className="editor-title-wrap">
-            <span className="editor-kicker">
-              Page {page.id.slice(0, 8)} / {formatDate(page.createdAt)}
-            </span>
-            <input
-              className="title-input"
-              value={title}
-              onChange={(event) => setTitle(event.target.value)}
-              aria-label="タイトル"
-            />
-          </div>
-          <div className="editor-actions">
-            <span className={`connection connection-${status}`}>
-              <i aria-hidden="true" />
-              {statusLabel(status)}
-            </span>
-            <span className="collaborators" aria-label="編集中のメンバー">
-              {users.map((item) => (
-                <span className="collaborator" key={`${item.name}-${item.color}`}>
-                  <i style={{ background: item.color }} aria-hidden="true" />
-                  {item.name}
-                </span>
-              ))}
-            </span>
-            <span className="action-spacer" />
-            <button type="submit" className="button" disabled={busy}>
+    <div className="flex flex-col gap-4">
+      <form className="flex flex-col gap-3" onSubmit={saveTitle}>
+        <div className="flex flex-col gap-1.5">
+          <Text variant="mono-secondary">
+            Page {page.id.slice(0, 8)} / {formatDate(page.createdAt)}
+          </Text>
+          <Input
+            value={title}
+            onChange={(event) => setTitle(event.target.value)}
+            aria-label="Title"
+            size="lg"
+            className="w-full text-xl font-semibold"
+          />
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2">
+          <Badge appearance="dot" variant={badgeForStatus(status)}>
+            {statusLabel(status)}
+          </Badge>
+          {users.map((item) => (
+            <Badge variant="neutral" key={`${item.name}-${item.color}`}>
+              {item.name}
+            </Badge>
+          ))}
+          <div className="ml-auto flex flex-wrap items-center gap-2">
+            <Button type="submit" variant="secondary" size="sm" disabled={busy}>
               タイトル保存
-            </button>
-            <button type="button" className="button loud" onClick={saveRevision} disabled={busy}>
-              版を保存 <span aria-hidden="true">↗</span>
-            </button>
-            <button type="button" className="button danger" onClick={remove} disabled={busy}>
+            </Button>
+            <Button
+              type="button"
+              variant="primary"
+              size="sm"
+              icon={<FloppyDiskIcon size={14} />}
+              onClick={saveRevision}
+              disabled={busy}
+            >
+              版を保存
+            </Button>
+            <Button
+              type="button"
+              variant="secondary-destructive"
+              size="sm"
+              icon={<TrashIcon size={14} />}
+              onClick={remove}
+              disabled={busy}
+            >
               削除
-            </button>
+            </Button>
           </div>
-        </form>
-
-        {error ? <p className="error">{error}</p> : null}
-
-        <div className="editor" ref={editorRef} />
-
-        <div className="editor-foot">
-          <span>{chars.toLocaleString('ja-JP')} chars</span>
-          <span>Auto-saved / Yjs</span>
-          <span>Markdown</span>
         </div>
-      </section>
+      </form>
 
-      <aside className="history">
-        <div className="history-head">
-          <span>History</span>
-          <span>{String(revisions.length).padStart(2, '0')}</span>
-        </div>
-        {revisions.length === 0 ? (
-          <p className="history-empty">まだ版はない。書き始めると、ここに時間が積もる。</p>
-        ) : (
-          <ol>
-            {revisions.map((revision) => (
-              <li key={revision.id}>
-                <div className="history-line">
-                  <span className="history-version">v{revision.version}</span>
-                  <span className="badge">{revision.manual ? 'manual' : 'auto'}</span>
-                </div>
-                <time>{formatDate(revision.createdAt)}</time>
-                <button
-                  type="button"
-                  className="history-restore"
-                  onClick={() => restore(revision.version)}
-                  disabled={busy}
-                >
-                  この版に戻す ↗
-                </button>
-              </li>
-            ))}
-          </ol>
-        )}
-      </aside>
+      {error ? (
+        <Text variant="error" size="sm">
+          {error}
+        </Text>
+      ) : null}
+
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_300px]">
+        <LayerCard className="overflow-hidden p-0">
+          <div className="flex items-center justify-between border-b border-kumo-line px-4 py-2">
+            <Text variant="mono-secondary">Markdown</Text>
+            <Badge variant="outline">Yjs</Badge>
+          </div>
+          <div className="min-h-[55vh]" ref={editorRef} />
+          <div className="flex flex-wrap items-center justify-between gap-2 border-t border-kumo-line px-4 py-2">
+            <Text variant="mono-secondary">{chars.toLocaleString('ja-JP')} chars</Text>
+            <Text variant="mono-secondary">Auto-saved</Text>
+          </div>
+        </LayerCard>
+
+        <LayerCard className="overflow-hidden p-0">
+          <div className="flex items-center justify-between border-b border-kumo-line px-4 py-3">
+            <Text variant="heading" as="h2">
+              History
+            </Text>
+            <Badge variant="outline">{revisions.length}</Badge>
+          </div>
+          {revisions.length === 0 ? (
+            <Empty
+              size="sm"
+              icon={<ClockCounterClockwiseIcon size={28} />}
+              title="No versions"
+              description="書き始めると、ここに時間が積もる。"
+            />
+          ) : (
+            <ul className="divide-y divide-kumo-line">
+              {revisions.map((revision) => (
+                <li className="flex flex-col gap-2 px-4 py-3" key={revision.id}>
+                  <div className="flex items-center gap-2">
+                    <Text variant="mono">v{revision.version}</Text>
+                    <Badge variant="outline">{revision.manual ? 'manual' : 'auto'}</Badge>
+                  </div>
+                  <Text variant="mono-secondary">{formatDate(revision.createdAt)}</Text>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="xs"
+                    icon={<ClockCounterClockwiseIcon size={14} />}
+                    onClick={() => restore(revision.version)}
+                    disabled={busy}
+                    className="w-fit"
+                  >
+                    この版に戻す
+                  </Button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </LayerCard>
+      </div>
     </div>
   );
 }
@@ -256,6 +289,12 @@ function statusLabel(status: ConnectionStatus): string {
   if (status === 'connected') return 'Connected';
   if (status === 'reconnecting') return 'Reconnecting';
   return 'Connecting';
+}
+
+function badgeForStatus(status: ConnectionStatus): 'success' | 'warning' | 'neutral' {
+  if (status === 'connected') return 'success';
+  if (status === 'reconnecting') return 'warning';
+  return 'neutral';
 }
 
 function colorFor(name: string): string {
