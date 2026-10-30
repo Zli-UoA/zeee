@@ -4,11 +4,12 @@ import { Editor } from '../../src/components/Editor';
 export default function PageView({ user, page, revisions, loginUrl }: Props) {
   if (!user) {
     return (
-      <div className="centered">
+      <div className="gate">
+        <span className="gate-index">01</span>
         <h1>ログインが必要です</h1>
-        <p>ページを開くにはログインしてください。</p>
-        <a className="button primary" href={loginUrl}>
-          ログイン
+        <p>Zeee は Zli のメンバーだけが使える、招待制の知識ベース。</p>
+        <a className="button loud" href={loginUrl}>
+          AuthZ でログイン <span aria-hidden="true">↗</span>
         </a>
       </div>
     );
@@ -16,11 +17,12 @@ export default function PageView({ user, page, revisions, loginUrl }: Props) {
 
   if (!page) {
     return (
-      <div className="centered">
-        <h1>ページがありません</h1>
-        <p>削除されたか、URL が違う可能性があります。</p>
+      <div className="gate">
+        <span className="gate-index">404</span>
+        <h1>ページがない</h1>
+        <p>削除されたか、URL が違うかもしれない。</p>
         <a className="button" href="/">
-          ページ一覧へ
+          Index へ <span aria-hidden="true">↗</span>
         </a>
       </div>
     );
@@ -28,9 +30,12 @@ export default function PageView({ user, page, revisions, loginUrl }: Props) {
 
   return (
     <div className="page-view">
-      <a className="back" href="/">
-        ← ページ一覧
-      </a>
+      <div className="page-top">
+        <a className="back" href="/">
+          ← Index
+        </a>
+        <span className="page-crumb">Zeee / {page.title}</span>
+      </div>
       <Editor page={page} user={user} revisions={revisions} />
     </div>
   );

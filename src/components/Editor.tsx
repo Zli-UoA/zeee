@@ -14,6 +14,32 @@ type Props = {
   revisions: RevisionRecord[];
 };
 
+const editorTheme = EditorView.theme({
+  '&': {
+    backgroundColor: 'transparent',
+    color: 'var(--ink)',
+  },
+  '.cm-content': {
+    caretColor: 'var(--accent)',
+    fontFamily: 'var(--font-mono)',
+    fontSize: '0.95rem',
+    lineHeight: '1.9',
+    padding: '0.8rem 0',
+  },
+  '.cm-line': {
+    padding: '0 0.2rem',
+  },
+  '.cm-gutters': {
+    display: 'none',
+  },
+  '.cm-activeLine': {
+    backgroundColor: 'color-mix(in srgb, var(--accent) 5%, transparent)',
+  },
+  '.cm-selectionBackground, ::selection': {
+    backgroundColor: 'color-mix(in srgb, var(--accent) 18%, transparent) !important',
+  },
+});
+
 export function Editor({ page, user, revisions }: Props) {
   const editorRef = useRef<HTMLDivElement>(null);
   const [title, setTitle] = useState(page.title);
@@ -21,6 +47,7 @@ export function Editor({ page, user, revisions }: Props) {
   const [users, setUsers] = useState<Collaborator[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [chars, setChars] = useState(page.markdown.length);
 
   useEffect(() => {
     let cancelled = false;
@@ -35,6 +62,9 @@ export function Editor({ page, user, revisions }: Props) {
         color: colorFor(user.displayName),
       });
 
+      const updateChars = () => setChars(text.length);
+      text.observe(updateChars);
+
       try {
         const response = await fetch(`/api/pages/${page.id}/state`);
         if (response.ok) {
@@ -42,15 +72,23 @@ export function Editor({ page, user, revisions }: Props) {
         }
         const seed = text.length === 0 && page.markdown.length > 0;
         if (seed) text.insert(0, page.markdown);
+        updateChars();
 
         if (cancelled || !editorRef.current) {
+          text.unobserve(updateChars);
           doc.destroy();
           return;
         }
 
         const view = new EditorView({
           doc: text.toJSON(),
-          extensions: [basicSetup, markdown(), EditorView.lineWrapping, yCollab(text, awareness)],
+          extensions: [
+            basicSetup,
+            markdown(),
+            EditorView.lineWrapping,
+            editorTheme,
+            yCollab(text, awareness),
+          ],
           parent: editorRef.current,
         });
         const provider = new ZeeeProvider(page.id, doc, awareness, seed, setStatus, setUsers);
@@ -59,9 +97,11 @@ export function Editor({ page, user, revisions }: Props) {
           provider.destroy();
           view.destroy();
           awareness.destroy();
+          text.unobserve(updateChars);
           doc.destroy();
         };
       } catch (loadError) {
+        text.unobserve(updateChars);
         setError(loadError instanceof Error ? loadError.message : '本文を読み込めませんでした');
         doc.destroy();
       }
@@ -130,58 +170,78 @@ export function Editor({ page, user, revisions }: Props) {
   return (
     <div className="editor-shell">
       <section className="editor-main">
-        <form className="editor-toolbar" onSubmit={saveTitle}>
-          <input
-            className="title-input"
-            value={title}
-            onChange={(event) => setTitle(event.target.value)}
-            aria-label="タイトル"
-          />
-          <button type="submit" disabled={busy}>
-            タイトル保存
-          </button>
-          <span className={`connection connection-${status}`}>{statusLabel(status)}</span>
-          <span className="collaborators" aria-label="編集中のメンバー">
-            {users.map((item) => (
-              <span className="collaborator" key={`${item.name}-${item.color}`}>
-                <i style={{ background: item.color }} />
-                {item.name}
-              </span>
-            ))}
-          </span>
-          <button type="button" onClick={saveRevision} disabled={busy}>
-            版を保存
-          </button>
-          <button type="button" className="danger" onClick={remove} disabled={busy}>
-            削除
-          </button>
+        <form className="editor-head" onSubmit={saveTitle}>
+          <div className="editor-title-wrap">
+            <span className="editor-kicker">
+              Page {page.id.slice(0, 8)} / {formatDate(page.createdAt)}
+            </span>
+            <input
+              className="title-input"
+              value={title}
+              onChange={(event) => setTitle(event.target.value)}
+              aria-label="タイトル"
+            />
+          </div>
+          <div className="editor-actions">
+            <span className={`connection connection-${status}`}>
+              <i aria-hidden="true" />
+              {statusLabel(status)}
+            </span>
+            <span className="collaborators" aria-label="編集中のメンバー">
+              {users.map((item) => (
+                <span className="collaborator" key={`${item.name}-${item.color}`}>
+                  <i style={{ background: item.color }} aria-hidden="true" />
+                  {item.name}
+                </span>
+              ))}
+            </span>
+            <span className="action-spacer" />
+            <button type="submit" className="button" disabled={busy}>
+              タイトル保存
+            </button>
+            <button type="button" className="button loud" onClick={saveRevision} disabled={busy}>
+              版を保存 <span aria-hidden="true">↗</span>
+            </button>
+            <button type="button" className="button danger" onClick={remove} disabled={busy}>
+              削除
+            </button>
+          </div>
         </form>
 
         {error ? <p className="error">{error}</p> : null}
+
         <div className="editor" ref={editorRef} />
-        <p className="hint">
-          Markdown をそのまま共同編集します。変更は自動保存され、10 分ごとに履歴が残ります。
-        </p>
+
+        <div className="editor-foot">
+          <span>{chars.toLocaleString('ja-JP')} chars</span>
+          <span>Auto-saved / Yjs</span>
+          <span>Markdown</span>
+        </div>
       </section>
 
       <aside className="history">
         <div className="history-head">
-          <h2>履歴</h2>
-          <span>{revisions.length}</span>
+          <span>History</span>
+          <span>{String(revisions.length).padStart(2, '0')}</span>
         </div>
         {revisions.length === 0 ? (
-          <p className="empty">まだ履歴はありません。</p>
+          <p className="history-empty">まだ版はない。書き始めると、ここに時間が積もる。</p>
         ) : (
           <ol>
             {revisions.map((revision) => (
               <li key={revision.id}>
-                <div>
-                  <strong>v{revision.version}</strong>
-                  <span className="badge">{revision.manual ? '手動' : '自動'}</span>
+                <div className="history-line">
+                  <span className="history-version">v{revision.version}</span>
+                  <span className="badge">{revision.manual ? 'manual' : 'auto'}</span>
                 </div>
                 <time>{formatDate(revision.createdAt)}</time>
-                <button type="button" onClick={() => restore(revision.version)} disabled={busy}>
-                  この版に戻す
+                <button
+                  type="button"
+                  className="history-restore"
+                  onClick={() => restore(revision.version)}
+                  disabled={busy}
+                >
+                  この版に戻す ↗
                 </button>
               </li>
             ))}
@@ -193,13 +253,13 @@ export function Editor({ page, user, revisions }: Props) {
 }
 
 function statusLabel(status: ConnectionStatus): string {
-  if (status === 'connected') return '接続済み';
-  if (status === 'reconnecting') return '再接続中';
-  return '接続中';
+  if (status === 'connected') return 'Connected';
+  if (status === 'reconnecting') return 'Reconnecting';
+  return 'Connecting';
 }
 
 function colorFor(name: string): string {
   let hash = 0;
   for (const character of name) hash = (hash * 31 + (character.codePointAt(0) ?? 0)) % 360;
-  return `hsl(${hash} 72% 42%)`;
+  return `hsl(${hash} 58% 38%)`;
 }
