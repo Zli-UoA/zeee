@@ -33,10 +33,16 @@ body {
 }
 
 .cm-content {
-  padding: 1.25rem 1.5rem;
-  font-size: 14px;
-  line-height: 1.8;
+  padding: 1rem;
+  font-size: 15px;
+  line-height: 1.9;
   caret-color: var(--color-kumo-brand);
+}
+
+@media (min-width: 768px) {
+  .cm-content {
+    padding: 1.25rem 1.5rem;
+  }
 }
 
 .cm-line {

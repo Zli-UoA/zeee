@@ -1,58 +1,57 @@
 import type { Props } from './index.server';
-import { Badge, Button, Empty, Input, LayerCard, Table, Text } from '@cloudflare/kumo';
-import { FileTextIcon } from '@phosphor-icons/react';
+import { Button, Empty, Input, LayerCard, Text } from '@cloudflare/kumo';
+import { FilesIcon, MagnifyingGlassIcon } from '@phosphor-icons/react';
 import { AppShell } from '../src/components/AppShell';
 import { Gate } from '../src/components/Gate';
-import { formatDate } from '../src/shared/format';
+import { formatDateOnly } from '../src/shared/format';
 
 export default function Home({ user, pages, query, results, loginUrl }: Props) {
   return (
-    <AppShell user={user} pages={pages} loginUrl={loginUrl}>
+    <AppShell user={user} pages={pages} query={query}>
       {!user ? (
         <Gate
-          code="AUTH / 01"
           title="Zeee は Zli のための知識ベース"
           description="AuthZ でログインすると、ページの作成と共同編集ができる。"
           action={{ href: loginUrl, label: 'AuthZ でログイン' }}
         />
       ) : (
-        <div className="flex flex-col gap-4">
-          <div className="flex flex-wrap items-end justify-between gap-3">
-            <div className="flex flex-col gap-1">
-              <Text variant="heading" size="lg" as="h1">
-                {query ? 'Search' : 'Index'}
-              </Text>
-              <Text variant="secondary" size="sm">
-                {query
-                  ? `${results.length} results for “${query}”`
-                  : `${pages.length} pages in Zeee`}
-              </Text>
-            </div>
-            <Badge variant="beta">internal</Badge>
+        <div className="flex flex-col gap-6">
+          <div className="flex flex-col gap-1">
+            <Text variant="heading" size="lg" as="h1">
+              {query ? '検索結果' : 'ページ'}
+            </Text>
+            <Text variant="secondary" size="sm">
+              {query ? `「${query}」に一致するページ ${results.length}件` : `${pages.length}ページ`}
+            </Text>
           </div>
 
-          <form method="get" action="/" className="flex items-center gap-2 sm:hidden">
+          <form method="get" action="/" role="search" className="flex items-center gap-2 lg:hidden">
             <Input
               name="q"
-              size="sm"
-              placeholder="Search pages"
-              aria-label="Search pages"
+              type="search"
+              defaultValue={query}
+              enterKeyHint="search"
+              placeholder="ページを検索"
+              aria-label="ページを検索"
               className="min-w-0 flex-1"
             />
-            <Button type="submit" variant="secondary" size="sm">
-              Search
-            </Button>
+            <Button
+              type="submit"
+              variant="secondary"
+              icon={<MagnifyingGlassIcon size={15} />}
+              aria-label="検索"
+            />
           </form>
 
           {query && results.length === 0 ? (
             <LayerCard className="p-0">
               <Empty
-                icon={<FileTextIcon size={32} />}
-                title="No results"
-                description="その言葉はまだ書かれていない。"
+                icon={<MagnifyingGlassIcon size={32} />}
+                title="該当なし"
+                description="一致するページはありません。"
                 contents={
                   <a className="text-sm text-kumo-link" href="/">
-                    索引に戻る
+                    ページ一覧に戻る
                   </a>
                 }
               />
@@ -60,9 +59,9 @@ export default function Home({ user, pages, query, results, loginUrl }: Props) {
           ) : !query && pages.length === 0 ? (
             <LayerCard className="p-0">
               <Empty
-                icon={<FileTextIcon size={32} />}
-                title="No pages yet"
-                description="最初のページを書いて、この索引をはじめよう。"
+                icon={<FilesIcon size={32} />}
+                title="まだページがありません"
+                description="新しいページを作成してください。"
                 contents={
                   <form
                     method="post"
@@ -71,15 +70,14 @@ export default function Home({ user, pages, query, results, loginUrl }: Props) {
                   >
                     <Input
                       name="title"
-                      size="sm"
-                      placeholder="Page title"
-                      aria-label="New page title"
+                      placeholder="ページタイトル"
+                      aria-label="新しいページのタイトル"
                       required
                       maxLength={200}
                       className="min-w-0 flex-1"
                     />
-                    <Button type="submit" variant="primary" size="sm">
-                      Create
+                    <Button type="submit" variant="primary">
+                      作成
                     </Button>
                   </form>
                 }
@@ -87,49 +85,42 @@ export default function Home({ user, pages, query, results, loginUrl }: Props) {
             </LayerCard>
           ) : (
             <LayerCard className="overflow-hidden p-0">
-              <Table>
-                <Table.Header>
-                  <Table.Row>
-                    <Table.Head>{query ? 'Page' : 'Title'}</Table.Head>
-                    <Table.Head className="w-48">{query ? 'Excerpt' : 'Updated'}</Table.Head>
-                  </Table.Row>
-                </Table.Header>
-                <Table.Body>
-                  {query
-                    ? results.map((result) => (
-                        <Table.Row key={result.id}>
-                          <Table.Cell>
-                            <a
-                              className="font-medium text-kumo-link no-underline hover:underline"
-                              href={`/pages/${result.id}`}
-                            >
-                              {result.title}
-                            </a>
-                          </Table.Cell>
-                          <Table.Cell>
-                            <Text variant="secondary" size="sm" truncate>
-                              {result.excerpt}
-                            </Text>
-                          </Table.Cell>
-                        </Table.Row>
-                      ))
-                    : pages.map((page) => (
-                        <Table.Row key={page.id}>
-                          <Table.Cell>
-                            <a
-                              className="font-medium text-kumo-link no-underline hover:underline"
-                              href={`/pages/${page.id}`}
-                            >
-                              {page.title}
-                            </a>
-                          </Table.Cell>
-                          <Table.Cell>
-                            <Text variant="mono-secondary">{formatDate(page.updatedAt)}</Text>
-                          </Table.Cell>
-                        </Table.Row>
-                      ))}
-                </Table.Body>
-              </Table>
+              <ul className="divide-y divide-kumo-line">
+                {query
+                  ? results.map((result) => (
+                      <li key={result.id}>
+                        <a
+                          className="flex flex-col gap-1 px-4 py-3 no-underline hover:bg-kumo-tint focus-visible:ring-2 focus-visible:ring-kumo-brand focus-visible:ring-inset focus-visible:outline-none"
+                          href={`/pages/${result.id}`}
+                        >
+                          <span className="truncate text-sm font-medium text-kumo-link">
+                            {result.title}
+                          </span>
+                          <span className="line-clamp-2 text-sm text-kumo-subtle">
+                            {result.excerpt}
+                          </span>
+                        </a>
+                      </li>
+                    ))
+                  : pages.map((page) => (
+                      <li key={page.id}>
+                        <a
+                          className="flex items-center justify-between gap-4 px-4 py-3 no-underline hover:bg-kumo-tint focus-visible:ring-2 focus-visible:ring-kumo-brand focus-visible:ring-inset focus-visible:outline-none"
+                          href={`/pages/${page.id}`}
+                        >
+                          <span className="truncate text-sm font-medium text-kumo-link">
+                            {page.title}
+                          </span>
+                          <time
+                            className="shrink-0 text-xs text-kumo-subtle"
+                            dateTime={new Date(page.updatedAt).toISOString()}
+                          >
+                            {formatDateOnly(page.updatedAt)}
+                          </time>
+                        </a>
+                      </li>
+                    ))}
+              </ul>
             </LayerCard>
           )}
         </div>

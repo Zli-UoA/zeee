@@ -1,6 +1,6 @@
-import type { ReactNode } from 'react';
-import { Badge, Breadcrumbs, Button, Input, Text } from '@cloudflare/kumo';
-import { PlusIcon, SignOutIcon } from '@phosphor-icons/react';
+import { useEffect, useState, type ReactNode } from 'react';
+import { Button, Input, Sidebar, Text, useSidebar } from '@cloudflare/kumo';
+import { FilesIcon, ListIcon, PlusIcon, SignOutIcon } from '@phosphor-icons/react';
 import type { PageSummary, SessionUser } from '../server/types';
 
 type Props = {
@@ -8,136 +8,225 @@ type Props = {
   pages: PageSummary[];
   activePageId?: string;
   activeTitle?: string;
-  loginUrl: string;
+  query?: string;
   children: ReactNode;
 };
 
-export function AppShell({ user, pages, activePageId, activeTitle, loginUrl, children }: Props) {
+export function AppShell({ user, pages, activePageId, activeTitle, query, children }: Props) {
+  const [livePages, setLivePages] = useState(pages);
+  const [liveTitle, setLiveTitle] = useState(activeTitle);
+
+  useEffect(() => {
+    setLivePages(pages);
+    setLiveTitle(activeTitle);
+  }, [pages, activeTitle]);
+
+  useEffect(() => {
+    const handleRename = (event: Event) => {
+      const detail = (event as CustomEvent<{ id: string; title: string }>).detail;
+      if (!detail) return;
+      setLivePages((current) =>
+        current.map((page) => (page.id === detail.id ? { ...page, title: detail.title } : page)),
+      );
+      if (detail.id === activePageId) setLiveTitle(detail.title);
+    };
+    window.addEventListener('zeee:page-renamed', handleRename);
+    return () => window.removeEventListener('zeee:page-renamed', handleRename);
+  }, [activePageId]);
+
+  useEffect(() => {
+    document.title = liveTitle ? `${liveTitle} | Zeee` : query ? '検索結果 | Zeee' : 'Zeee';
+  }, [liveTitle, query]);
+
+  if (!user) {
+    return (
+      <div className="min-h-svh bg-kumo-canvas text-kumo-default">
+        <SkipToContent />
+        <header className="border-b border-kumo-line bg-kumo-base">
+          <div className="mx-auto flex h-14 max-w-6xl items-center px-4 sm:px-6">
+            <Brand />
+          </div>
+        </header>
+        <main id="main" className="mx-auto w-full max-w-6xl px-4 py-6 sm:px-6 lg:py-10">
+          {children}
+        </main>
+      </div>
+    );
+  }
+
   return (
-    <div className="min-h-screen bg-kumo-canvas text-kumo-default">
-      <header className="sticky top-0 z-30 border-b border-kumo-line bg-kumo-base/90 backdrop-blur">
-        <div className="mx-auto flex h-14 max-w-[1440px] items-center gap-3 px-4">
-          <a className="flex shrink-0 items-center gap-2 no-underline" href="/">
-            <span className="text-lg font-semibold tracking-tight text-kumo-strong">Zeee</span>
-            <Badge variant="outline">zli</Badge>
-          </a>
+    <Sidebar.Provider collapsible="offcanvas" className="min-h-svh bg-kumo-canvas">
+      <SkipToContent />
+      <Sidebar id="pages-nav" className="md:sticky md:top-0 md:h-svh">
+        <Sidebar.Header className="h-14 justify-between px-4">
+          <Brand />
+          <Sidebar.Close className="size-8 md:hidden" aria-label="ページ一覧を閉じる" />
+        </Sidebar.Header>
 
-          <div className="hidden min-w-0 md:block">
-            <Breadcrumbs size="sm">
-              <Breadcrumbs.Link href="/">Index</Breadcrumbs.Link>
-              {activeTitle ? (
-                <>
-                  <Breadcrumbs.Separator />
-                  <Breadcrumbs.Current>{activeTitle}</Breadcrumbs.Current>
-                </>
-              ) : null}
-            </Breadcrumbs>
-          </div>
+        <Sidebar.Content>
+          <form
+            method="post"
+            action="/"
+            aria-label="新しいページ"
+            className="mb-5 flex flex-col gap-2 px-1"
+          >
+            <Input
+              name="title"
+              placeholder="ページタイトル"
+              aria-label="新しいページのタイトル"
+              required
+              maxLength={200}
+            />
+            <Button
+              type="submit"
+              variant="primary"
+              icon={<PlusIcon size={14} />}
+              className="w-full"
+            >
+              作成
+            </Button>
+          </form>
 
-          <div className="ml-auto flex items-center gap-2">
-            {user ? (
-              <>
-                <form method="get" action="/" className="hidden sm:block">
-                  <Input
-                    name="q"
-                    size="sm"
-                    placeholder="Search pages"
-                    aria-label="Search pages"
-                    className="w-56"
-                  />
-                </form>
-                <Badge variant="neutral">{user.displayName}</Badge>
-                <a
-                  className="inline-flex h-8 items-center gap-1.5 rounded-md px-2 text-xs font-medium text-kumo-subtle no-underline hover:bg-kumo-tint hover:text-kumo-default"
-                  href="/auth/logout"
-                >
-                  <SignOutIcon size={14} />
-                  Logout
-                </a>
-              </>
-            ) : (
-              <a
-                className="inline-flex h-8 items-center rounded-md bg-kumo-contrast px-3 text-xs font-medium text-kumo-inverse no-underline hover:opacity-90"
-                href={loginUrl}
+          <Sidebar.Group>
+            <Sidebar.GroupLabel>ページ</Sidebar.GroupLabel>
+            <Sidebar.Menu>
+              <Sidebar.MenuButton
+                href="/"
+                active={!activePageId}
+                aria-current={!activePageId ? 'page' : undefined}
+                icon={<FilesIcon size={16} />}
               >
-                Login
-              </a>
-            )}
-          </div>
-        </div>
-      </header>
-
-      {user ? (
-        <div className="mx-auto grid max-w-[1440px] grid-cols-1 lg:grid-cols-[260px_minmax(0,1fr)]">
-          <aside className="border-b border-kumo-line bg-kumo-elevated/40 lg:border-b-0 lg:border-r">
-            <div className="p-3 lg:p-4">
-              <div className="mb-3 hidden items-center justify-between lg:flex">
-                <Text variant="heading" as="h2">
-                  Pages
-                </Text>
-                <Badge variant="outline">{pages.length}</Badge>
-              </div>
-
-              <form
-                method="post"
-                action="/"
-                className="flex flex-row items-center gap-2 lg:flex-col lg:items-stretch"
-              >
-                <Input
-                  name="title"
-                  placeholder="New page title"
-                  aria-label="New page title"
-                  required
-                  maxLength={200}
-                  className="min-w-0 flex-1"
-                />
-                <Button
-                  type="submit"
-                  variant="primary"
-                  icon={<PlusIcon size={14} />}
-                  className="shrink-0"
+                すべてのページ
+              </Sidebar.MenuButton>
+              {livePages.map((page) => (
+                <Sidebar.MenuButton
+                  href={`/pages/${page.id}`}
+                  active={page.id === activePageId}
+                  aria-current={page.id === activePageId ? 'page' : undefined}
+                  key={page.id}
                 >
-                  Create
-                </Button>
-              </form>
+                  {page.title}
+                </Sidebar.MenuButton>
+              ))}
+            </Sidebar.Menu>
+          </Sidebar.Group>
+
+          {livePages.length === 0 ? (
+            <div className="px-3 py-3">
+              <Text variant="secondary" size="sm">
+                まだページがありません。
+              </Text>
+            </div>
+          ) : null}
+        </Sidebar.Content>
+      </Sidebar>
+
+      <div className="flex min-w-0 flex-1 flex-col">
+        <header className="sticky top-0 z-30 border-b border-kumo-line bg-kumo-base/90 backdrop-blur">
+          <div className="flex h-14 items-center gap-2 px-3 sm:px-5 lg:px-6">
+            <MobileNavButton />
+
+            <div className="min-w-0 md:hidden">
+              <span className="block truncate text-sm font-medium text-kumo-strong">
+                {liveTitle ?? 'Zeee'}
+              </span>
             </div>
 
-            <nav
-              className="px-2 pb-3 lg:max-h-[calc(100vh-11rem)] lg:overflow-y-auto lg:pb-4"
-              aria-label="Pages"
-            >
-              <ul className="flex gap-1 overflow-x-auto lg:block lg:space-y-1 lg:overflow-visible">
-                {pages.map((page) => (
-                  <li className="shrink-0 lg:shrink" key={page.id}>
-                    <a
-                      href={`/pages/${page.id}`}
-                      className={
-                        page.id === activePageId
-                          ? 'block truncate rounded-md bg-kumo-tint px-2 py-1.5 text-sm font-medium text-kumo-strong no-underline ring-1 ring-kumo-line'
-                          : 'block truncate rounded-md px-2 py-1.5 text-sm text-kumo-subtle no-underline hover:bg-kumo-tint hover:text-kumo-default'
-                      }
-                      title={page.title}
-                    >
-                      {page.title}
-                    </a>
-                  </li>
-                ))}
-              </ul>
-              {pages.length === 0 ? (
-                <div className="px-2 pt-2">
-                  <Text variant="secondary" size="sm">
-                    No pages yet.
-                  </Text>
-                </div>
-              ) : null}
-            </nav>
-          </aside>
+            {liveTitle ? (
+              <nav
+                className="hidden min-w-0 items-center gap-2 md:flex"
+                aria-label="パンくずリスト"
+              >
+                <a
+                  className="shrink-0 text-sm text-kumo-subtle no-underline hover:text-kumo-default"
+                  href="/"
+                >
+                  ページ
+                </a>
+                <span className="text-kumo-subtle">/</span>
+                <span className="truncate text-sm font-medium text-kumo-strong">{liveTitle}</span>
+              </nav>
+            ) : null}
 
-          <main className="min-w-0 p-4 lg:p-6">{children}</main>
-        </div>
-      ) : (
-        <main className="mx-auto max-w-[1440px] p-4 lg:p-6">{children}</main>
-      )}
-    </div>
+            <div className="ml-auto flex items-center gap-2">
+              <form method="get" action="/" role="search" className="hidden lg:block">
+                <Input
+                  name="q"
+                  type="search"
+                  defaultValue={query}
+                  placeholder="ページを検索"
+                  aria-label="ページを検索"
+                  enterKeyHint="search"
+                  className="w-64"
+                />
+              </form>
+
+              <span
+                className="grid size-7 shrink-0 place-items-center rounded-full bg-kumo-tint text-[11px] font-semibold text-kumo-strong"
+                aria-label={`ログイン中: ${user.displayName}`}
+                title={user.displayName}
+              >
+                {user.displayName.slice(0, 1)}
+              </span>
+              <span className="hidden text-xs text-kumo-subtle lg:inline">{user.displayName}</span>
+              <a
+                className="inline-flex h-8 items-center gap-1.5 rounded-md px-2 text-xs font-medium text-kumo-subtle no-underline hover:bg-kumo-tint hover:text-kumo-default"
+                href="/auth/logout"
+                aria-label="ログアウト"
+                title="ログアウト"
+              >
+                <SignOutIcon size={15} />
+                <span className="hidden lg:inline">ログアウト</span>
+              </a>
+            </div>
+          </div>
+        </header>
+
+        <main
+          id="main"
+          className="mx-auto w-full max-w-[1100px] flex-1 px-4 py-6 sm:px-6 lg:px-8 lg:py-8"
+        >
+          {children}
+        </main>
+      </div>
+    </Sidebar.Provider>
+  );
+}
+
+function SkipToContent() {
+  return (
+    <a
+      href="#main"
+      className="sr-only focus:not-sr-only focus:fixed focus:top-3 focus:left-3 focus:z-50 focus:rounded-md focus:bg-kumo-base focus:px-3 focus:py-2 focus:text-sm focus:ring focus:ring-kumo-line"
+    >
+      本文へスキップ
+    </a>
+  );
+}
+
+function MobileNavButton() {
+  const { openMobile, setOpenMobile } = useSidebar();
+
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      shape="square"
+      aria-label="ページ一覧を開く"
+      aria-controls="pages-nav"
+      aria-expanded={openMobile}
+      onClick={() => setOpenMobile(true)}
+      className="-ml-1 size-9 md:hidden"
+    >
+      <ListIcon size={18} />
+    </Button>
+  );
+}
+
+function Brand() {
+  return (
+    <a className="flex shrink-0 items-center gap-2 no-underline" href="/">
+      <span className="text-lg font-semibold tracking-tight text-kumo-strong">Zeee</span>
+    </a>
   );
 }
