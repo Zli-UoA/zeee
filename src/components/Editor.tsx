@@ -33,7 +33,6 @@ const editorTheme = EditorView.theme({
     fontFamily: 'ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace',
     fontSize: '15px',
     lineHeight: '1.9',
-    padding: '1.25rem 1.5rem',
   },
   '.cm-line': {
     padding: '0 0.15rem',
@@ -121,7 +120,12 @@ export function Editor({ page, user, revisions }: Props) {
   useEffect(() => {
     if (!historyOpen) return;
     if (window.matchMedia('(max-width: 1279px)').matches) {
-      historyRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      historyRef.current?.scrollIntoView({
+        behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches
+          ? 'instant'
+          : 'smooth',
+        block: 'start',
+      });
     }
   }, [historyOpen]);
 
@@ -195,7 +199,7 @@ export function Editor({ page, user, revisions }: Props) {
   const others = users.filter((item) => item.name !== user.displayName);
 
   return (
-    <div className="mx-auto flex w-full max-w-5xl flex-col gap-4">
+    <div className="flex w-full flex-col gap-4">
       <div className="flex flex-col gap-3">
         <Input
           value={title}
@@ -278,7 +282,7 @@ export function Editor({ page, user, revisions }: Props) {
         {historyOpen ? (
           <div
             ref={historyRef}
-            className="self-start xl:sticky xl:top-20 xl:max-h-[calc(100vh-6rem)] xl:overflow-y-auto"
+            className="scroll-mt-20 self-start xl:sticky xl:top-20 xl:max-h-[calc(100vh-6rem)] xl:overflow-y-auto"
           >
             <LayerCard className="overflow-hidden p-0">
               <div className="flex items-center justify-between border-b border-kumo-line px-3 py-2">

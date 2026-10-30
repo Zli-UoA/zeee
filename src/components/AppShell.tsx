@@ -122,7 +122,7 @@ export function AppShell({ user, pages, activePageId, activeTitle, query, childr
 
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="sticky top-0 z-30 h-14 border-b border-kumo-line bg-kumo-base/90 backdrop-blur">
-          <div className="flex h-full items-center gap-2 px-3 sm:px-5 lg:px-6">
+          <div className="mx-auto flex h-full w-full max-w-[1100px] items-center gap-2 px-4 sm:px-6 lg:px-8">
             <MobileNavButton />
 
             <div className="min-w-0 md:hidden">
@@ -147,7 +147,7 @@ export function AppShell({ user, pages, activePageId, activeTitle, query, childr
               </nav>
             ) : null}
 
-            <div className="ml-auto flex items-center gap-2">
+            <div className="ml-auto flex shrink-0 items-center gap-2">
               <form method="get" action="/" role="search" className="hidden lg:block">
                 <Input
                   name="q"
@@ -167,7 +167,9 @@ export function AppShell({ user, pages, activePageId, activeTitle, query, childr
               >
                 {user.displayName.slice(0, 1)}
               </span>
-              <span className="hidden text-xs text-kumo-subtle lg:inline">{user.displayName}</span>
+              <span className="hidden max-w-32 truncate text-xs text-kumo-subtle lg:inline">
+                {user.displayName}
+              </span>
               <a
                 className="inline-flex h-8 items-center gap-1.5 rounded-md px-2 text-xs font-medium text-kumo-subtle no-underline hover:bg-kumo-tint hover:text-kumo-default"
                 href="/auth/logout"
