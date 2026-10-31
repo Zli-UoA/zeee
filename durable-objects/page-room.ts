@@ -7,7 +7,7 @@ import { decodeBase64, encodeBase64 } from '../src/shared/base64';
 
 type ClientMessage =
   | { type: 'sync'; stateVector: string }
-  | { type: 'update'; update: string; actor?: string }
+  | { type: 'update'; update: string; actor?: string; clientSeq?: number }
   | { type: 'awareness'; update: string };
 
 const TEN_MINUTES = 10 * 60 * 1000;
@@ -137,11 +137,17 @@ class PageRoomObject extends DurableObject<Env> {
 
     if (parsed.type !== 'update') return;
 
-    const update = decodeBase64(parsed.update);
-    Y.applyUpdate(this.doc, update, 'remote');
-    this.lastActorId = parsed.actor ?? this.lastActorId;
-    this.saveUpdate(update, this.lastActorId);
-    this.broadcast({ type: 'update', update: parsed.update }, socket);
+    const clientSeq = typeof parsed.clientSeq === 'number' ? parsed.clientSeq : undefined;
+    try {
+      const update = decodeBase64(parsed.update);
+      Y.applyUpdate(this.doc, update, 'remote');
+      this.lastActorId = parsed.actor ?? this.lastActorId;
+      this.saveUpdate(update, this.lastActorId);
+      this.broadcast({ type: 'update', update: parsed.update }, socket);
+      if (clientSeq !== undefined) this.reply(socket, { type: 'ack', clientSeq });
+    } catch {
+      if (clientSeq !== undefined) this.reply(socket, { type: 'nack', clientSeq });
+    }
   }
 
   private saveUpdate(update: Uint8Array, actorId: string | null): void {
@@ -166,6 +172,14 @@ class PageRoomObject extends DurableObject<Env> {
       } catch {
         // The socket may have closed between the iteration and the send.
       }
+    }
+  }
+
+  private reply(socket: WebSocket, payload: unknown): void {
+    try {
+      socket.send(JSON.stringify(payload));
+    } catch {
+      // A closed socket will resend its pending updates after reconnecting.
     }
   }
 
