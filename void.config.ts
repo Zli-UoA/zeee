@@ -11,6 +11,7 @@ export default defineConfig({
       { name: 'viewport', content: 'width=device-width, initial-scale=1' },
       { name: 'color-scheme', content: 'light' },
     ],
+    link: [{ rel: 'icon', href: '/favicon.svg', type: 'image/svg+xml' }],
   },
   cloudflare: {
     name: 'zeee',
