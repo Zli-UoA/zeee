@@ -138,19 +138,6 @@ export function AppShell({
             <Sidebar.Close className="size-8 md:hidden" aria-label="ページ一覧を閉じる" />
           </Sidebar.Header>
 
-          <div className="px-3.5 pt-3 pb-2">
-            <Button
-              type="button"
-              variant="primary"
-              icon={<PlusIcon size={14} />}
-              onClick={() => setCreateOpen(true)}
-              aria-haspopup="dialog"
-              className="w-full"
-            >
-              新規ページ
-            </Button>
-          </div>
-
           <Sidebar.Content>
             {sidebarRecentPages.length > 0 ? (
               <Sidebar.Group>
@@ -239,7 +226,7 @@ export function AppShell({
               ) : null}
 
               <div className="ml-auto flex shrink-0 items-center gap-2">
-                <MobilePageActions onSearch={openSearch} onCreate={() => setCreateOpen(true)} />
+                <MobilePageActions onSearch={openSearch} />
 
                 <button
                   type="button"
@@ -256,6 +243,19 @@ export function AppShell({
                     Ctrl K
                   </kbd>
                 </button>
+
+                <Button
+                  type="button"
+                  variant="ghost"
+                  shape="square"
+                  aria-label="新しいページを作成"
+                  aria-haspopup="dialog"
+                  title="新しいページを作成"
+                  onClick={() => setCreateOpen(true)}
+                  className="size-11"
+                >
+                  <PlusIcon size={18} />
+                </Button>
 
                 <span
                   className="grid size-7 shrink-0 place-items-center rounded-full bg-kumo-tint text-[11px] font-semibold text-kumo-strong"
@@ -347,7 +347,7 @@ function MobileNavButton() {
   );
 }
 
-function MobilePageActions({ onSearch, onCreate }: { onSearch: () => void; onCreate: () => void }) {
+function MobilePageActions({ onSearch }: { onSearch: () => void }) {
   return (
     <div className="flex items-center gap-1 lg:hidden">
       <Button
@@ -361,18 +361,6 @@ function MobilePageActions({ onSearch, onCreate }: { onSearch: () => void; onCre
         className="size-11"
       >
         <MagnifyingGlassIcon size={18} />
-      </Button>
-      <Button
-        type="button"
-        variant="ghost"
-        shape="square"
-        aria-label="新しいページを作成"
-        aria-haspopup="dialog"
-        title="新しいページを作成"
-        onClick={onCreate}
-        className="size-11 md:hidden"
-      >
-        <PlusIcon size={18} />
       </Button>
     </div>
   );
