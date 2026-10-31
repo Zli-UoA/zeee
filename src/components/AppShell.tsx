@@ -12,6 +12,7 @@ import {
 import { AppLink } from './AppLink';
 import { CommandPalette } from './CommandPalette';
 import { CreatePageDialog } from './CreatePageDialog';
+import { ZeeeLogo } from './ZeeeLogo';
 import { sidebarPageLists } from '../client/sidebarPages';
 import { useRecentPages, type RecentPage } from '../client/useRecentPages';
 import type { PageSummary, SessionUser } from '../server/types';
@@ -369,12 +370,12 @@ function MobilePageActions({ onSearch }: { onSearch: () => void }) {
 function Brand() {
   return (
     <Link
-      className="flex shrink-0 items-center gap-2 no-underline"
+      className="flex shrink-0 items-center gap-2 text-kumo-strong no-underline"
       href="/"
       aria-label="Zeee ホーム"
       title="ホーム"
     >
-      <span className="text-lg font-semibold text-kumo-strong">Zeee</span>
+      <ZeeeLogo className="h-6 w-auto" />
     </Link>
   );
 }
