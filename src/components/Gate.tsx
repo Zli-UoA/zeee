@@ -10,7 +10,7 @@ type Props = {
 export function Gate({ title, description, action }: Props) {
   return (
     <div className="mx-auto flex min-h-[60vh] w-full max-w-md flex-col justify-center py-10">
-      <LayerCard className="p-6 sm:p-8">
+      <LayerCard className="px-6 py-5 sm:px-8 sm:py-7">
         <div className="flex flex-col gap-3">
           <Text variant="heading" size="lg" as="h1" DANGEROUS_className="text-balance">
             {title}

@@ -1,14 +1,16 @@
 import { useCallback, useEffect, useState } from 'react';
+import {
+  encodeRecentPageIds,
+  RECENT_PAGES_COOKIE,
+  RECENT_PAGES_LIMIT,
+  RECENT_PAGES_SIDEBAR_LIMIT,
+  type RecentPage,
+} from '../shared/recent';
 
-export type RecentPage = {
-  id: string;
-  title: string;
-  visitedAt: number;
-};
+export { RECENT_PAGES_LIMIT, RECENT_PAGES_SIDEBAR_LIMIT };
+export type { RecentPage };
 
 export const RECENT_PAGES_STORAGE_KEY = 'zeee.recent-pages.v1';
-export const RECENT_PAGES_LIMIT = 8;
-export const RECENT_PAGES_SIDEBAR_LIMIT = 5;
 
 type RecentPagesStorage = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
 
@@ -75,31 +77,54 @@ export function clearLegacyRecentPages(storage: RecentPagesStorage) {
   }
 }
 
+function mergeRecentPages(primary: RecentPage[], secondary: RecentPage[]): RecentPage[] {
+  const seen = new Set<string>();
+  const merged: RecentPage[] = [];
+  for (const page of [...primary, ...secondary]) {
+    if (seen.has(page.id)) continue;
+    seen.add(page.id);
+    merged.push(page);
+    if (merged.length === RECENT_PAGES_LIMIT) break;
+  }
+  return merged;
+}
+
+function saveRecentCookie(pages: RecentPage[]) {
+  if (typeof document === 'undefined') return;
+  const secure = window.location.protocol === 'https:' ? '; Secure' : '';
+  document.cookie = `${RECENT_PAGES_COOKIE}=${encodeURIComponent(
+    encodeRecentPageIds(pages),
+  )}; Path=/; Max-Age=31536000; SameSite=Lax${secure}`;
+}
+
 type RecentPagesState = {
   userId: string;
   pages: RecentPage[];
 };
 
-export function useRecentPages(userId: string | undefined) {
-  const [state, setState] = useState<RecentPagesState | null>(null);
+export function useRecentPages(userId: string | undefined, initialPages: RecentPage[] = []) {
+  const [state, setState] = useState<RecentPagesState | null>(
+    userId ? { userId, pages: initialPages } : null,
+  );
 
   useEffect(() => {
     clearLegacyRecentPages(window.localStorage);
-    if (!userId) {
-      setState(null);
-      return;
-    }
-    setState({ userId, pages: loadRecentPages(window.localStorage, userId) });
-  }, [userId]);
+  }, []);
+
+  useEffect(() => {
+    setState(userId ? { userId, pages: initialPages } : null);
+  }, [userId, initialPages]);
 
   const recordVisit = useCallback(
     (page: { id: string; title: string }) => {
       if (!userId) return;
       setState((current) => {
-        const pages =
-          current?.userId === userId ? current.pages : loadRecentPages(window.localStorage, userId);
-        const next = withRecentPage(pages, page);
-        saveRecentPages(window.localStorage, userId, next);
+        const currentPages = current?.userId === userId ? current.pages : [];
+        const stored = loadRecentPages(window.localStorage, userId);
+        const next = withRecentPage(currentPages, page);
+        const persisted = withRecentPage(mergeRecentPages(currentPages, stored), page);
+        saveRecentPages(window.localStorage, userId, persisted);
+        saveRecentCookie(persisted);
         return { userId, pages: next };
       });
     },

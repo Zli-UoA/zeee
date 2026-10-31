@@ -4,6 +4,7 @@ export default defineConfig({
   target: 'cloudflare',
   head: {
     title: 'Zeee',
+    titleTemplate: '%s | Zeee',
     htmlAttrs: { lang: 'ja' },
     meta: [
       { charset: 'utf-8' },
