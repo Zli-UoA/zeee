@@ -2,14 +2,21 @@ import { useEffect, useRef, useState } from 'react';
 import * as Y from 'yjs';
 import { Awareness } from 'y-protocols/awareness';
 import { EditorView, basicSetup } from 'codemirror';
-import { markdown } from '@codemirror/lang-markdown';
-import { yCollab } from 'y-codemirror.next';
+import { Prec } from '@codemirror/state';
+import { keymap } from '@codemirror/view';
+import { markdown as markdownLanguage } from '@codemirror/lang-markdown';
+import { yCollab, yUndoManagerKeymap } from 'y-codemirror.next';
+import ReactMarkdown, { type Components } from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import rehypeSanitize from 'rehype-sanitize';
 import { Badge, Button, DropdownMenu, Empty, Input, LayerCard, Text } from '@cloudflare/kumo';
 import {
   ArrowCounterClockwiseIcon,
   ClockCounterClockwiseIcon,
   DotsThreeIcon,
+  EyeIcon,
   FloppyDiskIcon,
+  PencilSimpleIcon,
   TrashIcon,
   XIcon,
 } from '@phosphor-icons/react';
@@ -21,6 +28,36 @@ type Props = {
   page: PageRecord;
   user: SessionUser;
   revisions: RevisionRecord[];
+};
+
+type Collaboration = {
+  text: Y.Text;
+  awareness: Awareness;
+  undoManager: Y.UndoManager;
+};
+
+type Mode = 'read' | 'edit';
+
+const markdownComponents: Components = {
+  a({ href, children }) {
+    const external = href?.startsWith('http://') || href?.startsWith('https://');
+    return (
+      <a
+        href={href}
+        target={external ? '_blank' : undefined}
+        rel={external ? 'noreferrer noopener' : undefined}
+      >
+        {children}
+      </a>
+    );
+  },
+  table({ children }) {
+    return (
+      <div className="zeee-table">
+        <table>{children}</table>
+      </div>
+    );
+  },
 };
 
 const editorTheme = EditorView.theme({
@@ -35,7 +72,7 @@ const editorTheme = EditorView.theme({
     lineHeight: '1.9',
   },
   '.cm-line': {
-    padding: '0 0.15rem',
+    padding: '0',
   },
   '.cm-gutters': {
     display: 'none',
@@ -51,6 +88,10 @@ const editorTheme = EditorView.theme({
 export function Editor({ page, user, revisions }: Props) {
   const editorRef = useRef<HTMLDivElement>(null);
   const historyRef = useRef<HTMLDivElement>(null);
+  const renderTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [mode, setMode] = useState<Mode>('read');
+  const [markdown, setMarkdown] = useState(page.markdown);
+  const [collaboration, setCollaboration] = useState<Collaboration | null>(null);
   const [title, setTitle] = useState(page.title);
   const [savedTitle, setSavedTitle] = useState(page.title);
   const [status, setStatus] = useState<ConnectionStatus>('connecting');
@@ -61,17 +102,18 @@ export function Editor({ page, user, revisions }: Props) {
 
   useEffect(() => {
     let cancelled = false;
-    let cleanup: (() => void) | undefined;
+    let provider: ZeeeProvider | undefined;
+    let observer: (() => void) | undefined;
+    const doc = new Y.Doc();
+    const text = doc.getText('markdown');
+    const awareness = new Awareness(doc);
+    const undoManager = new Y.UndoManager(text);
+    awareness.setLocalStateField('user', {
+      name: user.displayName,
+      color: colorFor(user.displayName),
+    });
 
     void (async () => {
-      const doc = new Y.Doc();
-      const text = doc.getText('markdown');
-      const awareness = new Awareness(doc);
-      awareness.setLocalStateField('user', {
-        name: user.displayName,
-        color: colorFor(user.displayName),
-      });
-
       try {
         const response = await fetch(`/api/pages/${page.id}/state`);
         if (response.ok) {
@@ -79,32 +121,21 @@ export function Editor({ page, user, revisions }: Props) {
         }
         const seed = text.length === 0 && page.markdown.length > 0;
         if (seed) text.insert(0, page.markdown);
-
-        if (cancelled || !editorRef.current) {
+        if (cancelled) {
           doc.destroy();
           return;
         }
+        undoManager.clear();
 
-        const view = new EditorView({
-          doc: text.toJSON(),
-          extensions: [
-            basicSetup,
-            markdown(),
-            EditorView.lineWrapping,
-            EditorView.contentAttributes.of({ 'aria-label': '本文' }),
-            editorTheme,
-            yCollab(text, awareness),
-          ],
-          parent: editorRef.current,
-        });
-        const provider = new ZeeeProvider(page.id, doc, awareness, seed, setStatus, setUsers);
-
-        cleanup = () => {
-          provider.destroy();
-          view.destroy();
-          awareness.destroy();
-          doc.destroy();
+        setMarkdown(text.toJSON());
+        observer = () => {
+          if (renderTimerRef.current) clearTimeout(renderTimerRef.current);
+          renderTimerRef.current = setTimeout(() => setMarkdown(text.toJSON()), 120);
         };
+        text.observe(observer);
+
+        provider = new ZeeeProvider(page.id, doc, awareness, seed, setStatus, setUsers);
+        setCollaboration({ text, awareness, undoManager });
       } catch (loadError) {
         setError(loadError instanceof Error ? loadError.message : '本文を読み込めませんでした');
         doc.destroy();
@@ -113,9 +144,38 @@ export function Editor({ page, user, revisions }: Props) {
 
     return () => {
       cancelled = true;
-      cleanup?.();
+      if (renderTimerRef.current) {
+        clearTimeout(renderTimerRef.current);
+        renderTimerRef.current = null;
+      }
+      if (observer) text.unobserve(observer);
+      provider?.destroy();
+      undoManager.destroy();
+      awareness.destroy();
+      doc.destroy();
+      setCollaboration(null);
     };
   }, [page.id]);
+
+  useEffect(() => {
+    if (mode !== 'edit' || !collaboration || !editorRef.current) return;
+    const view = new EditorView({
+      doc: collaboration.text.toJSON(),
+      extensions: [
+        basicSetup,
+        Prec.high(keymap.of(yUndoManagerKeymap)),
+        markdownLanguage(),
+        EditorView.lineWrapping,
+        EditorView.contentAttributes.of({ 'aria-label': '本文' }),
+        editorTheme,
+        yCollab(collaboration.text, collaboration.awareness, {
+          undoManager: collaboration.undoManager,
+        }),
+      ],
+      parent: editorRef.current,
+    });
+    return () => view.destroy();
+  }, [mode, collaboration]);
 
   useEffect(() => {
     if (!historyOpen) return;
@@ -200,72 +260,112 @@ export function Editor({ page, user, revisions }: Props) {
 
   return (
     <div className="flex w-full flex-col gap-4">
-      <div className="flex flex-col gap-3">
-        <Input
-          value={title}
-          onChange={(event) => setTitle(event.target.value)}
-          onBlur={() => void saveTitle()}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter') {
-              event.preventDefault();
-              event.currentTarget.blur();
-            }
-          }}
-          aria-label="タイトル"
-          enterKeyHint="done"
-          size="lg"
-          className="w-full border-0 bg-transparent px-0 py-0 text-2xl font-semibold shadow-none ring-0 focus:ring-2 focus:ring-kumo-focus/40"
-        />
-
-        <div className="flex flex-wrap items-center gap-2">
-          {status !== 'connected' ? (
-            <Badge appearance="dot" variant={badgeForStatus(status)} aria-live="polite">
-              {statusLabel(status)}
-            </Badge>
-          ) : null}
-          {others.map((item) => (
-            <Badge variant="neutral" key={`${item.name}-${item.color}`}>
-              {item.name}
-            </Badge>
-          ))}
-
-          <div className="ml-auto flex items-center gap-1">
-            <Button
-              type="button"
-              variant="secondary"
-              icon={<ClockCounterClockwiseIcon size={15} />}
-              onClick={() => setHistoryOpen((open) => !open)}
-              aria-pressed={historyOpen}
-            >
-              履歴
-            </Button>
-            <DropdownMenu>
-              <DropdownMenu.Trigger
-                render={
-                  <Button type="button" variant="ghost" shape="square" aria-label="ページメニュー">
-                    <DotsThreeIcon size={18} />
-                  </Button>
-                }
+      <div
+        className={
+          historyOpen ? 'flex flex-col gap-3 xl:pe-[calc(280px+1rem)]' : 'flex flex-col gap-3'
+        }
+      >
+        <div className="zeee-column flex flex-col gap-2 px-5 sm:flex-row sm:items-center sm:gap-3 sm:px-0">
+          <div className="min-w-0 sm:flex-1">
+            {mode === 'edit' ? (
+              <Input
+                value={title}
+                onChange={(event) => setTitle(event.target.value)}
+                onBlur={() => void saveTitle()}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') {
+                    event.preventDefault();
+                    event.currentTarget.blur();
+                  }
+                }}
+                aria-label="タイトル"
+                enterKeyHint="done"
+                size="lg"
+                className="w-full border-0 bg-transparent px-0 py-0 text-2xl font-semibold shadow-none ring-0 focus:ring-2 focus:ring-kumo-focus/40"
               />
-              <DropdownMenu.Content>
-                <DropdownMenu.Item
-                  variant="danger"
-                  icon={<TrashIcon size={16} />}
-                  onClick={() => void remove()}
-                  disabled={busy}
+            ) : (
+              <div className="flex h-10 items-center">
+                <h1
+                  className="w-full truncate text-2xl font-semibold tracking-tight text-kumo-strong"
+                  title={title}
                 >
-                  ページを削除
-                </DropdownMenu.Item>
-              </DropdownMenu.Content>
-            </DropdownMenu>
+                  {title || '無題'}
+                </h1>
+              </div>
+            )}
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2 sm:flex-nowrap">
+            {status !== 'connected' ? (
+              <Badge appearance="dot" variant={badgeForStatus(status)} aria-live="polite">
+                {statusLabel(status)}
+              </Badge>
+            ) : null}
+            {others.map((item) => (
+              <Badge variant="neutral" key={`${item.name}-${item.color}`}>
+                {item.name}
+              </Badge>
+            ))}
+
+            <div className="ml-auto flex shrink-0 items-center gap-1 sm:ml-0">
+              <Button
+                type="button"
+                variant={mode === 'read' ? 'primary' : 'secondary'}
+                icon={mode === 'read' ? <PencilSimpleIcon size={15} /> : <EyeIcon size={15} />}
+                onClick={() => {
+                  if (mode === 'edit') {
+                    collaboration?.awareness.setLocalStateField('cursor', null);
+                    setMarkdown(collaboration?.text.toJSON() ?? markdown);
+                  }
+                  setMode(mode === 'read' ? 'edit' : 'read');
+                }}
+              >
+                {mode === 'read' ? '編集' : '閲覧'}
+              </Button>
+              <Button
+                type="button"
+                variant="secondary"
+                icon={<ClockCounterClockwiseIcon size={15} />}
+                onClick={() => setHistoryOpen((open) => !open)}
+                aria-pressed={historyOpen}
+              >
+                履歴
+              </Button>
+              <DropdownMenu>
+                <DropdownMenu.Trigger
+                  render={
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      shape="square"
+                      aria-label="ページメニュー"
+                    >
+                      <DotsThreeIcon size={18} />
+                    </Button>
+                  }
+                />
+                <DropdownMenu.Content>
+                  <DropdownMenu.Item
+                    variant="danger"
+                    icon={<TrashIcon size={16} />}
+                    onClick={() => void remove()}
+                    disabled={busy}
+                  >
+                    ページを削除
+                  </DropdownMenu.Item>
+                </DropdownMenu.Content>
+              </DropdownMenu>
+            </div>
           </div>
         </div>
       </div>
 
       {error ? (
-        <Text variant="error" size="sm">
-          {error}
-        </Text>
+        <div className={historyOpen ? 'xl:pe-[calc(280px+1rem)]' : undefined}>
+          <Text variant="error" size="sm">
+            {error}
+          </Text>
+        </div>
       ) : null}
 
       <div
@@ -276,7 +376,44 @@ export function Editor({ page, user, revisions }: Props) {
         }
       >
         <LayerCard className="overflow-hidden p-0">
-          <div className="min-h-[60svh] lg:min-h-[calc(100vh-18rem)]" ref={editorRef} />
+          {mode === 'read' ? (
+            <div className="min-h-[60svh] px-5 py-7 sm:px-8 sm:py-9 lg:min-h-[calc(100vh-18rem)]">
+              {markdown.trim() ? (
+                <article className="zeee-prose">
+                  <ReactMarkdown
+                    remarkPlugins={[remarkGfm]}
+                    rehypePlugins={[rehypeSanitize]}
+                    components={markdownComponents}
+                  >
+                    {markdown}
+                  </ReactMarkdown>
+                </article>
+              ) : (
+                <Empty
+                  icon={<PencilSimpleIcon size={28} />}
+                  title="本文はまだありません"
+                  description="編集モードで書き始めましょう。"
+                  contents={
+                    <Button
+                      type="button"
+                      variant="primary"
+                      icon={<PencilSimpleIcon size={15} />}
+                      onClick={() => setMode('edit')}
+                    >
+                      本文を書く
+                    </Button>
+                  }
+                />
+              )}
+            </div>
+          ) : (
+            <div className="flex min-h-[60svh] flex-col px-5 py-7 sm:px-8 sm:py-9 lg:min-h-[calc(100vh-18rem)]">
+              <div
+                className="zeee-column min-h-[calc(60svh-3.5rem)] flex-1 lg:min-h-[calc(100vh-18rem-4.5rem)]"
+                ref={editorRef}
+              />
+            </div>
+          )}
         </LayerCard>
 
         {historyOpen ? (

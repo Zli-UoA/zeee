@@ -89,6 +89,9 @@ doc_update(seq, data BLOB, actor_id, created_at)
 - CodeMirror での入力、接続状態、在席表示
 - 版の保存と履歴表示
 - 再読み込み後の本文表示
+- 読み物ビュー（GFM の表・コード・引用・リンク）と閲覧 / 編集の切替
+- 読み物ビューでのライブ更新（別ユーザーの追記がリロードなしで反映）
+- モバイル幅での読み物ビューと操作
 
 ## まだ確認していないこと
 
@@ -131,6 +134,7 @@ Traefik → celld (2 pods, bucket durability)
 - WebSocket は cell 移動で 1012。クライアントは再接続する。
 - 現状の session は opaque token。secret 署名鍵を持たない代わりに D1 参照。
 - CSRF は SameSite=Lax + Origin 検査。本番でフォームを増やすなら token を足す。
+- `ZEEE_DEV_AUTH=1` の間は、リダイレクト / cookie / WebSocket の Origin 判定を実際のアクセス origin 基準にする。`PUBLIC_ORIGIN` が `127.0.0.1` でも LAN IP や `localhost` から開いて WS が 403 にならない。
 - `pages/index.server.ts` の action は `Origin` を見る。dev auth は GET なので開発専用。
 
 ## 次の作業

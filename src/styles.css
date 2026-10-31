@@ -33,20 +33,14 @@ body {
 }
 
 .cm-editor .cm-scroller .cm-content {
-  padding: 1rem;
+  padding: 0;
   font-size: 15px;
   line-height: 1.9;
   caret-color: var(--color-kumo-brand);
 }
 
-@media (min-width: 768px) {
-  .cm-editor .cm-scroller .cm-content {
-    padding: 1.25rem 1.5rem;
-  }
-}
-
 .cm-line {
-  padding: 0 0.15rem;
+  padding: 0;
 }
 
 .cm-gutters {
@@ -60,4 +54,181 @@ body {
 .cm-selectionBackground,
 .cm-content ::selection {
   background: color-mix(in oklab, var(--color-kumo-brand) 22%, transparent) !important;
+}
+
+.zeee-column {
+  width: 100%;
+  max-width: 36.5rem;
+  margin-inline: auto;
+}
+
+.zeee-prose {
+  width: 100%;
+  max-width: 36.5rem;
+  margin: 0 auto;
+  color: var(--text-color-kumo-default);
+  font-size: 15px;
+  line-height: 1.9;
+  overflow-wrap: anywhere;
+}
+
+.zeee-prose > :first-child {
+  margin-top: 0;
+}
+
+.zeee-prose > :last-child {
+  margin-bottom: 0;
+}
+
+.zeee-prose h1,
+.zeee-prose h2,
+.zeee-prose h3,
+.zeee-prose h4,
+.zeee-prose h5,
+.zeee-prose h6 {
+  margin: 1.8em 0 0.6em;
+  color: var(--text-color-kumo-strong);
+  font-weight: 600;
+  line-height: 1.35;
+  letter-spacing: -0.01em;
+}
+
+.zeee-prose h1 {
+  font-size: 1.6em;
+}
+
+.zeee-prose h2 {
+  padding-bottom: 0.3em;
+  border-bottom: 1px solid var(--color-kumo-line);
+  font-size: 1.3em;
+}
+
+.zeee-prose h3 {
+  font-size: 1.12em;
+}
+
+.zeee-prose h4,
+.zeee-prose h5,
+.zeee-prose h6 {
+  font-size: 1em;
+}
+
+.zeee-prose p,
+.zeee-prose ul,
+.zeee-prose ol,
+.zeee-prose blockquote,
+.zeee-prose pre,
+.zeee-prose .zeee-table {
+  margin: 1em 0;
+}
+
+.zeee-prose ul,
+.zeee-prose ol {
+  padding-left: 1.5em;
+}
+
+.zeee-prose ul {
+  list-style: disc;
+}
+
+.zeee-prose ol {
+  list-style: decimal;
+}
+
+.zeee-prose li + li {
+  margin-top: 0.3em;
+}
+
+.zeee-prose .task-list-item {
+  list-style: none;
+}
+
+.zeee-prose li > ul,
+.zeee-prose li > ol {
+  margin: 0.3em 0;
+}
+
+.zeee-prose a {
+  color: var(--text-color-kumo-link);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in oklab, var(--text-color-kumo-link) 40%, transparent);
+  text-underline-offset: 0.18em;
+}
+
+.zeee-prose a:hover {
+  text-decoration-color: currentColor;
+}
+
+.zeee-prose strong {
+  color: var(--text-color-kumo-strong);
+  font-weight: 600;
+}
+
+.zeee-prose blockquote {
+  padding: 0.1em 0 0.1em 1em;
+  border-left: 3px solid var(--color-kumo-line);
+  color: var(--text-color-kumo-subtle);
+}
+
+.zeee-prose code {
+  padding: 0.12em 0.35em;
+  border-radius: 4px;
+  background: var(--color-kumo-tint);
+  font-family: var(--font-mono, ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace);
+  font-size: 0.88em;
+}
+
+.zeee-prose pre {
+  overflow-x: auto;
+  padding: 1rem 1.1rem;
+  border: 1px solid var(--color-kumo-line);
+  border-radius: 8px;
+  background: var(--color-kumo-recessed);
+  line-height: 1.7;
+}
+
+.zeee-prose pre code {
+  padding: 0;
+  background: transparent;
+  font-size: 13px;
+}
+
+.zeee-prose hr {
+  margin: 2em 0;
+  border: 0;
+  border-top: 1px solid var(--color-kumo-line);
+}
+
+.zeee-prose img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 6px;
+}
+
+.zeee-prose .zeee-table {
+  overflow-x: auto;
+}
+
+.zeee-prose table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.94em;
+}
+
+.zeee-prose th,
+.zeee-prose td {
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--color-kumo-line);
+  text-align: left;
+  vertical-align: top;
+}
+
+.zeee-prose th {
+  color: var(--text-color-kumo-strong);
+  font-weight: 600;
+}
+
+.zeee-prose input[type='checkbox'] {
+  margin-right: 0.45em;
+  accent-color: var(--color-kumo-brand);
 }
