@@ -2,7 +2,12 @@ import { describe, expect, it } from 'vite-plus/test';
 import { splitHighlight } from '../src/client/highlight';
 import { buildPaletteActions, normalizeSearchResults } from '../src/client/palette';
 import {
+  clearLegacyRecentPages,
+  loadRecentPages,
   normalizeRecentPages,
+  RECENT_PAGES_STORAGE_KEY,
+  recentPagesStorageKey,
+  saveRecentPages,
   withRecentPage,
   type RecentPage,
 } from '../src/client/useRecentPages';
@@ -134,4 +139,47 @@ describe('recent pages', () => {
     ]);
     expect(normalizeRecentPages({ id: 'a' })).toEqual([]);
   });
+
+  it('scopes the storage key to the signed-in user', () => {
+    expect(recentPagesStorageKey('user-a')).toBe(`${RECENT_PAGES_STORAGE_KEY}:user-a`);
+    expect(recentPagesStorageKey('user-a')).not.toBe(recentPagesStorageKey('user-b'));
+  });
+
+  it('keeps recent pages separate for each user', () => {
+    const storage = memoryStorage();
+    saveRecentPages(storage, 'user-a', [{ id: 'a', title: 'A', visitedAt: 1 }]);
+    saveRecentPages(storage, 'user-b', [{ id: 'b', title: 'B', visitedAt: 2 }]);
+
+    expect(loadRecentPages(storage, 'user-a')).toEqual([{ id: 'a', title: 'A', visitedAt: 1 }]);
+    expect(loadRecentPages(storage, 'user-b')).toEqual([{ id: 'b', title: 'B', visitedAt: 2 }]);
+    expect(loadRecentPages(storage, 'user-c')).toEqual([]);
+    expect(storage.getItem(RECENT_PAGES_STORAGE_KEY)).toBeNull();
+  });
+
+  it('ignores and clears the legacy shared storage key', () => {
+    const legacy = [{ id: 'old', title: 'Old', visitedAt: 1 }];
+    const storage = memoryStorage({
+      [RECENT_PAGES_STORAGE_KEY]: JSON.stringify(legacy),
+    });
+
+    expect(loadRecentPages(storage, 'user-a')).toEqual([]);
+
+    clearLegacyRecentPages(storage);
+    expect(storage.getItem(RECENT_PAGES_STORAGE_KEY)).toBeNull();
+  });
 });
+
+function memoryStorage(initial: Record<string, string> = {}) {
+  const values = new Map(Object.entries(initial));
+  return {
+    getItem(key: string) {
+      return values.get(key) ?? null;
+    },
+    setItem(key: string, value: string) {
+      values.set(key, value);
+    },
+    removeItem(key: string) {
+      values.delete(key);
+    },
+  };
+}
