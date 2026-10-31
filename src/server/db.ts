@@ -1,6 +1,17 @@
 import { randomToken, sha256Base64Url, uuid } from './crypto';
 import { ensureSchema } from './schema';
-import type { PageRecord, PageSummary, RevisionRecord, SearchResult, SessionUser } from './types';
+import {
+  PAGE_LIST_LIMIT,
+  type PageRecord,
+  type PageSort,
+  type PageSummary,
+  type RevisionRecord,
+  type SearchResult,
+  type SessionUser,
+} from './types';
+
+const EXCERPT_LENGTH = 180;
+const EXCERPT_SOURCE_LENGTH = 1000;
 
 type UserRow = {
   id: string;
@@ -15,6 +26,22 @@ type PageRow = {
   title: string;
   created_by: string;
   created_at: number;
+  updated_at: number;
+};
+
+type PageSummaryRow = {
+  id: string;
+  title: string;
+  created_at: number;
+  updated_at: number;
+  created_by_name: string | null;
+  excerpt_source: string | null;
+};
+
+type SearchRow = {
+  id: string;
+  title: string;
+  excerpt: string | null;
   updated_at: number;
 };
 
@@ -157,32 +184,104 @@ export async function listPages(db: D1Database): Promise<PageSummary[]> {
   await ensureSchema(db);
   const result = await db
     .prepare(
-      'SELECT id, title, updated_at FROM page WHERE deleted_at IS NULL ORDER BY updated_at DESC LIMIT 200',
+      `SELECT p.id, p.title, p.created_at, p.updated_at,
+              u.display_name AS created_by_name,
+              substr(COALESCE(b.markdown, ''), 1, ${EXCERPT_SOURCE_LENGTH}) AS excerpt_source
+       FROM page p
+       LEFT JOIN app_user u ON u.id = p.created_by
+       LEFT JOIN page_body b ON b.page_id = p.id
+       WHERE p.deleted_at IS NULL
+       ORDER BY p.updated_at DESC
+       LIMIT ${PAGE_LIST_LIMIT}`,
     )
-    .all<{ id: string; title: string; updated_at: number }>();
-  return (result.results ?? []).map((row) => ({
+    .all<PageSummaryRow>();
+  return (result.results ?? []).map(toPageSummary);
+}
+
+export function sortPageSummaries(pages: PageSummary[], sort: PageSort): PageSummary[] {
+  const sorted = [...pages];
+  if (sort === 'title') {
+    sorted.sort(
+      (a, b) =>
+        a.title.localeCompare(b.title, 'ja', { numeric: true, sensitivity: 'base' }) ||
+        b.updatedAt - a.updatedAt ||
+        a.id.localeCompare(b.id),
+    );
+  } else if (sort === 'created') {
+    sorted.sort(
+      (a, b) => b.createdAt - a.createdAt || b.updatedAt - a.updatedAt || a.id.localeCompare(b.id),
+    );
+  } else {
+    sorted.sort(
+      (a, b) => b.updatedAt - a.updatedAt || b.createdAt - a.createdAt || a.id.localeCompare(b.id),
+    );
+  }
+  return sorted;
+}
+
+export function excerptFromMarkdown(markdown: string, maxLength = EXCERPT_LENGTH): string {
+  const plain = markdown
+    .replace(/\r\n?/g, '\n')
+    .replace(/```[^\n]*\n?([\s\S]*?)```/g, '$1')
+    .replace(/~~~[^\n]*\n?([\s\S]*?)~~~/g, '$1')
+    .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/^\s{0,3}#{1,6}\s+/gm, '')
+    .replace(/^\s{0,3}>\s?/gm, '')
+    .replace(/^\s{0,3}(?:[-*+]|\d+[.)])\s+/gm, '')
+    .replace(/^\s*\|?[\s:|-]+\|?\s*$/gm, ' ')
+    .replace(/\|/g, ' ')
+    .replace(/^\s*([-*_])(?:\s*\1){2,}\s*$/gm, ' ')
+    .replace(/\*\*([^*]+)\*\*/g, '$1')
+    .replace(/__([^_]+)__/g, '$1')
+    .replace(/\*([^*]+)\*/g, '$1')
+    .replace(/~~([^~]+)~~/g, '$1')
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/\*\*/g, '')
+    .replace(/~~/g, '')
+    .replace(/`/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  const characters = Array.from(plain);
+  if (characters.length <= maxLength) return plain;
+  return `${characters.slice(0, maxLength).join('').trimEnd()}…`;
+}
+
+function toPageSummary(row: PageSummaryRow): PageSummary {
+  return {
     id: row.id,
     title: row.title,
+    createdAt: row.created_at,
+    createdByName: row.created_by_name ?? '',
+    excerpt: excerptFromMarkdown(row.excerpt_source ?? ''),
     updatedAt: row.updated_at,
-  }));
+  };
 }
 
 export async function getPage(db: D1Database, pageId: string): Promise<PageRecord | null> {
   await ensureSchema(db);
   const row = await db
     .prepare(
-      `SELECT p.id, p.title, p.created_by, p.created_at, p.updated_at, COALESCE(b.markdown, '') AS markdown
-       FROM page p LEFT JOIN page_body b ON b.page_id = p.id
+      `SELECT p.id, p.title, p.created_by, p.created_at, p.updated_at,
+              u.display_name AS created_by_name,
+              COALESCE(b.markdown, '') AS markdown
+       FROM page p
+       LEFT JOIN app_user u ON u.id = p.created_by
+       LEFT JOIN page_body b ON b.page_id = p.id
        WHERE p.id = ? AND p.deleted_at IS NULL`,
     )
     .bind(pageId)
-    .first<PageRow & { markdown: string }>();
+    .first<PageRow & { created_by_name: string | null; markdown: string }>();
   if (!row) return null;
   return {
     id: row.id,
     title: row.title,
     createdBy: row.created_by,
+    createdByName: row.created_by_name ?? '',
     createdAt: row.created_at,
+    excerpt: excerptFromMarkdown(row.markdown),
     updatedAt: row.updated_at,
     markdown: row.markdown,
   };
@@ -196,6 +295,10 @@ export async function createPage(
   await ensureSchema(db);
   const id = uuid();
   const timestamp = Date.now();
+  const author = await db
+    .prepare('SELECT display_name FROM app_user WHERE id = ?')
+    .bind(userId)
+    .first<{ display_name: string }>();
   await db.batch([
     db
       .prepare(
@@ -208,7 +311,14 @@ export async function createPage(
     db.prepare('DELETE FROM page_fts WHERE page_id = ?').bind(id),
     db.prepare('INSERT INTO page_fts (page_id, title, body) VALUES (?, ?, ?)').bind(id, title, ''),
   ]);
-  return { id, title, updatedAt: timestamp };
+  return {
+    id,
+    title,
+    createdAt: timestamp,
+    createdByName: author?.display_name ?? '',
+    excerpt: '',
+    updatedAt: timestamp,
+  };
 }
 
 export async function updatePageTitle(
@@ -352,14 +462,16 @@ export async function searchPages(db: D1Database, query: string): Promise<Search
       const match = `"${trimmed.replaceAll('"', '""')}"`;
       const result = await db
         .prepare(
-          `SELECT f.page_id AS id, f.title AS title, snippet(page_fts, 2, '', '', '…', 16) AS excerpt
+          `SELECT f.page_id AS id, f.title AS title,
+                  snippet(page_fts, 2, '', '', '…', 16) AS excerpt,
+                  p.updated_at AS updated_at
            FROM page_fts f JOIN page p ON p.id = f.page_id
            WHERE page_fts MATCH ? AND p.deleted_at IS NULL
            ORDER BY rank LIMIT 20`,
         )
         .bind(match)
-        .all<{ id: string; title: string; excerpt: string }>();
-      return result.results ?? [];
+        .all<SearchRow>();
+      return (result.results ?? []).map(toSearchResult);
     } catch {
       // Fall through to LIKE for stores without a usable FTS tokenizer.
     }
@@ -368,14 +480,25 @@ export async function searchPages(db: D1Database, query: string): Promise<Search
   const like = `%${trimmed}%`;
   const result = await db
     .prepare(
-      `SELECT p.id, p.title, substr(COALESCE(b.markdown, ''), 1, 160) AS excerpt
+      `SELECT p.id, p.title,
+              substr(COALESCE(b.markdown, ''), 1, ${EXCERPT_SOURCE_LENGTH}) AS excerpt,
+              p.updated_at AS updated_at
        FROM page p LEFT JOIN page_body b ON b.page_id = p.id
        WHERE p.deleted_at IS NULL AND (p.title LIKE ? OR b.markdown LIKE ?)
        ORDER BY p.updated_at DESC LIMIT 20`,
     )
     .bind(like, like)
-    .all<{ id: string; title: string; excerpt: string }>();
-  return result.results ?? [];
+    .all<SearchRow>();
+  return (result.results ?? []).map(toSearchResult);
+}
+
+function toSearchResult(row: SearchRow): SearchResult {
+  return {
+    id: row.id,
+    title: row.title,
+    excerpt: excerptFromMarkdown(row.excerpt ?? ''),
+    updatedAt: row.updated_at,
+  };
 }
 
 export async function recordAudit(

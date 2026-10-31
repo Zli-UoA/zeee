@@ -1,30 +1,60 @@
 import { defineHandler } from 'void';
 import { getSessionUser, loginPath } from '../src/server/auth';
-import { createPage, listPages, recordAudit, searchPages } from '../src/server/db';
+import {
+  createPage,
+  listPages,
+  recordAudit,
+  searchPages,
+  sortPageSummaries,
+} from '../src/server/db';
 import { redirectTo, sameOrigin } from '../src/server/http';
-import type { Env, PageSummary, SearchResult, SessionUser } from '../src/server/types';
+import type { Env, PageSort, PageSummary, SearchResult, SessionUser } from '../src/server/types';
 
 export type Props = {
   user: SessionUser | null;
   pages: PageSummary[];
+  sidebarPages: PageSummary[];
   query: string;
+  sort: PageSort;
   results: SearchResult[];
+  now: number;
   loginUrl: string;
 };
+
+function parseSort(value: string | null): PageSort {
+  if (value === 'created' || value === 'title') return value;
+  return 'updated';
+}
 
 export const loader = defineHandler(async (c): Promise<Props> => {
   const user = await getSessionUser(c);
   if (!user) {
-    return { user: null, pages: [], query: '', results: [], loginUrl: loginPath(c, '/') };
+    return {
+      user: null,
+      pages: [],
+      sidebarPages: [],
+      query: '',
+      sort: 'updated',
+      results: [],
+      now: Date.now(),
+      loginUrl: loginPath(c, '/'),
+    };
   }
 
   const env = c.env as Env;
-  const query = (new URL(c.req.url).searchParams.get('q') ?? '').trim();
+  const url = new URL(c.req.url);
+  const query = (url.searchParams.get('q') ?? '').trim();
+  const sort = parseSort(url.searchParams.get('sort'));
+  const sidebarPages = await listPages(env.DB);
+  const pages = sortPageSummaries(sidebarPages, sort);
   return {
     user,
-    pages: await listPages(env.DB),
+    pages,
+    sidebarPages,
     query,
+    sort,
     results: query ? await searchPages(env.DB, query) : [],
+    now: Date.now(),
     loginUrl: loginPath(c, '/'),
   };
 });
