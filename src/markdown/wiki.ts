@@ -1,8 +1,11 @@
-export type WikiLinkPage = {
+export type LinkTarget = {
   id: string;
   title: string;
   updatedAt: number;
+  aliases: string[];
 };
+
+export type WikiLinkPage = LinkTarget;
 
 export type WikiTextSegment =
   | { type: 'text'; value: string }
@@ -31,13 +34,26 @@ export function parseWikiLinkInner(inner: string): { title: string; label: strin
 
 export function createWikiResolver(pages: WikiLinkPage[]): (title: string) => WikiLinkPage | null {
   const byTitle = new Map<string, WikiLinkPage>();
+  const byAlias = new Map<string, WikiLinkPage>();
+
   for (const page of pages) {
     const title = page.title.trim();
-    if (!title) continue;
-    const current = byTitle.get(title);
-    if (!current || page.updatedAt > current.updatedAt) byTitle.set(title, page);
+    if (title) {
+      const current = byTitle.get(title);
+      if (!current || page.updatedAt > current.updatedAt) byTitle.set(title, page);
+    }
+    for (const value of page.aliases ?? []) {
+      const alias = value.trim();
+      if (!alias) continue;
+      const current = byAlias.get(alias);
+      if (!current || page.updatedAt > current.updatedAt) byAlias.set(alias, page);
+    }
   }
-  return (title) => byTitle.get(title.trim()) ?? null;
+
+  return (title) => {
+    const key = title.trim();
+    return byTitle.get(key) ?? byAlias.get(key) ?? null;
+  };
 }
 
 export function splitWikiText(

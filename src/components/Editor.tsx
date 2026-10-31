@@ -1,6 +1,11 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import * as Y from 'yjs';
 import { Awareness } from 'y-protocols/awareness';
+import {
+  autocompletion,
+  type CompletionResult,
+  type CompletionSource,
+} from '@codemirror/autocomplete';
 import { EditorView, basicSetup } from 'codemirror';
 import { Prec } from '@codemirror/state';
 import { keymap } from '@codemirror/view';
@@ -25,6 +30,13 @@ import {
   type SaveStatus,
 } from '../client/provider';
 import type { PageRecord, PageSummary, RevisionRecord, SessionUser } from '../server/types';
+import {
+  filterWikiCompletions,
+  findWikiCompletionContext,
+  wikiCompletionText,
+  wikiCompletionTo,
+} from '../markdown/autocomplete';
+import type { LinkTarget } from '../markdown/wiki';
 import { formatDate } from '../shared/format';
 import { MarkdownView } from './MarkdownView';
 import { RevisionPreview } from './RevisionPreview';
@@ -34,6 +46,7 @@ type Props = {
   user: SessionUser;
   revisions: RevisionRecord[];
   pages: PageSummary[];
+  linkTargets?: LinkTarget[];
 };
 
 type Collaboration = {
@@ -69,7 +82,7 @@ const editorTheme = EditorView.theme({
   },
 });
 
-export function Editor({ page, user, revisions, pages }: Props) {
+export function Editor({ page, user, revisions, pages, linkTargets }: Props) {
   const editorRef = useRef<HTMLDivElement>(null);
   const historyRef = useRef<HTMLDivElement>(null);
   const renderTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -90,6 +103,10 @@ export function Editor({ page, user, revisions, pages }: Props) {
   const [restoreBusy, setRestoreBusy] = useState(false);
   const [restoreError, setRestoreError] = useState('');
   const [error, setError] = useState('');
+  const targets = useMemo<LinkTarget[]>(
+    () => linkTargets ?? pages.map((item) => ({ ...item, aliases: [] as string[] })),
+    [linkTargets, pages],
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -219,6 +236,7 @@ export function Editor({ page, user, revisions, pages }: Props) {
         basicSetup,
         Prec.high(keymap.of(yUndoManagerKeymap)),
         markdownLanguage(),
+        autocompletion({ override: [wikiCompletionSource(targets)] }),
         EditorView.lineWrapping,
         EditorView.contentAttributes.of({ 'aria-label': '本文' }),
         editorTheme,
@@ -229,7 +247,7 @@ export function Editor({ page, user, revisions, pages }: Props) {
       parent: editorRef.current,
     });
     return () => view.destroy();
-  }, [mode, collaboration]);
+  }, [mode, collaboration, targets]);
 
   useEffect(() => {
     if (!historyOpen) return;
@@ -475,6 +493,7 @@ export function Editor({ page, user, revisions, pages }: Props) {
               <MarkdownView
                 markdown={markdown}
                 pages={pages}
+                linkTargets={targets}
                 pageId={page.id}
                 pageTitle={savedTitle}
                 sidePanel={!historyOpen}
@@ -709,6 +728,34 @@ function SaveStatusBadge({
       ) : null}
     </div>
   );
+}
+
+function wikiCompletionSource(targets: LinkTarget[]): CompletionSource {
+  return (context) => wikiCompletionResult(targets, context.state.doc.toString(), context.pos);
+}
+
+function wikiCompletionResult(
+  targets: LinkTarget[],
+  markdown: string,
+  pos: number,
+): CompletionResult | null {
+  const found = findWikiCompletionContext(markdown, pos);
+  if (!found) return null;
+  const candidates = filterWikiCompletions(targets, found.query);
+  if (candidates.length === 0) return null;
+  return {
+    from: found.from,
+    to: wikiCompletionTo(markdown, pos),
+    filter: false,
+    options: candidates.map((candidate) => ({
+      label: candidate.title,
+      type: 'text',
+      detail: candidate.matchedAlias ? `別名: ${candidate.matchedAlias}` : undefined,
+      apply: wikiCompletionText(candidate.title),
+    })),
+    update: (_current, _from, _to, context) =>
+      wikiCompletionResult(targets, context.state.doc.toString(), context.pos),
+  };
 }
 
 function colorFor(name: string): string {
