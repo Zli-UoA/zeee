@@ -80,7 +80,7 @@ export default function TrashPage({
   }
 
   return (
-    <AppShell user={user} pages={pages} activeTitle="ゴミ箱">
+    <AppShell user={user} pages={pages} activeTitle="ゴミ箱" activeNav="trash">
       {!user ? (
         <Gate
           title="ログインが必要です"
@@ -112,7 +112,10 @@ export default function TrashPage({
                 {notice.kind === 'restored' ? (
                   <>
                     {' '}
-                    <a className="text-kumo-link" href={`/pages/${notice.id}`}>
+                    <a
+                      className="rounded-sm text-kumo-link focus-visible:ring-2 focus-visible:ring-kumo-brand focus-visible:outline-none"
+                      href={`/pages/${notice.id}`}
+                    >
                       ページを開く
                     </a>
                   </>
@@ -144,7 +147,7 @@ export default function TrashPage({
             </LayerCard>
           ) : (
             <LayerCard className="overflow-hidden p-0">
-              <ul className="divide-y divide-kumo-line">
+              <ul aria-label="削除済みのページ" className="divide-y divide-kumo-line">
                 {deletedPages.map((page) => (
                   <li
                     key={page.id}
@@ -187,6 +190,7 @@ export default function TrashPage({
                         onClick={() => void restore(page)}
                         loading={pending?.id === page.id && pending.action === 'restore'}
                         disabled={pending !== null}
+                        aria-label={`「${page.title}」を復元`}
                       >
                         復元
                       </Button>
@@ -198,6 +202,7 @@ export default function TrashPage({
                         onClick={() => openConfirm(page)}
                         loading={pending?.id === page.id && pending.action === 'purge'}
                         disabled={pending !== null}
+                        aria-label={`「${page.title}」を完全に削除`}
                       >
                         完全に削除
                       </Button>

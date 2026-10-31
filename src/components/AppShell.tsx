@@ -9,19 +9,34 @@ import {
   TrashIcon,
 } from '@phosphor-icons/react';
 import { CommandPalette, type CommandPaletteIntent } from './CommandPalette';
-import { RECENT_PAGES_SIDEBAR_LIMIT, useRecentPages } from '../client/useRecentPages';
+import {
+  RECENT_PAGES_SIDEBAR_LIMIT,
+  useRecentPages,
+  type RecentPage,
+} from '../client/useRecentPages';
 import type { PageSummary, SessionUser } from '../server/types';
+
+type NavSection = 'trash';
 
 type Props = {
   user: SessionUser | null;
   pages: PageSummary[];
   activePageId?: string;
   activeTitle?: string;
+  activeNav?: NavSection;
   query?: string;
   children: ReactNode;
 };
 
-export function AppShell({ user, pages, activePageId, activeTitle, query, children }: Props) {
+export function AppShell({
+  user,
+  pages,
+  activePageId,
+  activeTitle,
+  activeNav,
+  query,
+  children,
+}: Props) {
   const [livePages, setLivePages] = useState(pages);
   const [liveTitle, setLiveTitle] = useState(activeTitle);
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -37,7 +52,13 @@ export function AppShell({ user, pages, activePageId, activeTitle, query, childr
     [recentPages, livePages],
   );
 
-  const sidebarRecentPages = recentPagesWithTitles.slice(0, RECENT_PAGES_SIDEBAR_LIMIT);
+  const { recentPages: sidebarRecentPages, otherPages } = useMemo(
+    () => sidebarPageLists(livePages, recentPagesWithTitles),
+    [livePages, recentPagesWithTitles],
+  );
+
+  const isHome = !activePageId && activeNav === undefined;
+  const isTrash = activeNav === 'trash';
 
   useEffect(() => {
     setLivePages(pages);
@@ -143,6 +164,8 @@ export function AppShell({ user, pages, activePageId, activeTitle, query, childr
                     href={`/pages/${page.id}`}
                     size="sm"
                     icon={ClockCounterClockwiseIcon}
+                    active={page.id === activePageId}
+                    aria-current={page.id === activePageId ? 'page' : undefined}
                     key={page.id}
                   >
                     {page.title}
@@ -157,12 +180,12 @@ export function AppShell({ user, pages, activePageId, activeTitle, query, childr
             <Sidebar.Menu>
               <Sidebar.MenuButton
                 href="/"
-                active={!activePageId}
-                aria-current={!activePageId ? 'page' : undefined}
+                active={isHome}
+                aria-current={isHome ? 'page' : undefined}
               >
                 すべてのページ
               </Sidebar.MenuButton>
-              {livePages.map((page) => (
+              {otherPages.map((page) => (
                 <Sidebar.MenuButton
                   href={`/pages/${page.id}`}
                   active={page.id === activePageId}
@@ -186,7 +209,12 @@ export function AppShell({ user, pages, activePageId, activeTitle, query, childr
 
         <Sidebar.Footer>
           <Sidebar.Menu className="w-full">
-            <Sidebar.MenuButton href="/trash" icon={TrashIcon}>
+            <Sidebar.MenuButton
+              href="/trash"
+              icon={TrashIcon}
+              active={isTrash}
+              aria-current={isTrash ? 'page' : undefined}
+            >
               ゴミ箱
             </Sidebar.MenuButton>
           </Sidebar.Menu>
@@ -277,6 +305,19 @@ export function AppShell({ user, pages, activePageId, activeTitle, query, childr
       />
     </Sidebar.Provider>
   );
+}
+
+export function sidebarPageLists(
+  pages: PageSummary[],
+  recentPages: RecentPage[],
+  limit = RECENT_PAGES_SIDEBAR_LIMIT,
+): { recentPages: RecentPage[]; otherPages: PageSummary[] } {
+  const visibleRecentPages = recentPages.slice(0, limit);
+  const recentIds = new Set(visibleRecentPages.map((page) => page.id));
+  return {
+    recentPages: visibleRecentPages,
+    otherPages: pages.filter((page) => !recentIds.has(page.id)),
+  };
 }
 
 function SkipToContent() {
