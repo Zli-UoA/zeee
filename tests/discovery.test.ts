@@ -12,6 +12,12 @@ import {
   withRecentPage,
   type RecentPage,
 } from '../src/client/useRecentPages';
+import {
+  encodeRecentPageIds,
+  parseRecentPageIds,
+  recentPagesCookieName,
+  recentPagesFromIds,
+} from '../src/shared/recent';
 import type { PageSummary } from '../src/server/types';
 
 describe('splitHighlight', () => {
@@ -54,42 +60,39 @@ describe('splitHighlight', () => {
 describe('palette actions', () => {
   const result = { id: 'page-1', title: 'Page 1', excerpt: 'excerpt' };
 
-  it('puts search results before the create action', () => {
+  it('puts search results before the all-results action', () => {
     const actions = buildPaletteActions({
       trimmedQuery: 'page',
       results: [result],
       resultsQuery: 'page',
       loading: false,
       error: null,
-      intent: 'search',
       recentPages: [],
     });
 
-    expect(actions.map((action) => action.kind)).toEqual(['result', 'all', 'create']);
+    expect(actions.map((action) => action.kind)).toEqual(['result', 'all']);
   });
 
-  it('puts the create action first when the search has no results', () => {
+  it('returns only the all-results action when the search has no results', () => {
     const actions = buildPaletteActions({
       trimmedQuery: 'missing',
       results: [],
       resultsQuery: 'missing',
       loading: false,
       error: null,
-      intent: 'search',
       recentPages: [],
     });
 
-    expect(actions.map((action) => action.kind)).toEqual(['create', 'all']);
+    expect(actions.map((action) => action.kind)).toEqual(['all']);
   });
 
-  it('does not expose create while a search is pending or failed', () => {
+  it('does not expose actions while a search is pending or failed', () => {
     const base = {
       trimmedQuery: 'page',
       results: [result],
       resultsQuery: 'page',
       loading: false,
       error: null,
-      intent: 'search' as const,
       recentPages: [],
     };
 
@@ -172,7 +175,7 @@ describe('recent pages', () => {
 });
 
 describe('sidebar page lists', () => {
-  it('shows recent pages once and keeps the rest of the page list in order', () => {
+  it('shows recent pages and keeps every page in the page list', () => {
     const pages = [pageSummary('page-1'), pageSummary('page-2'), pageSummary('page-3')];
     const recent = [
       { id: 'page-2', title: 'Page 2', visitedAt: 2 },
@@ -181,11 +184,11 @@ describe('sidebar page lists', () => {
 
     expect(sidebarPageLists(pages, recent)).toEqual({
       recentPages: recent,
-      otherPages: [pageSummary('page-3')],
+      allPages: pages,
     });
   });
 
-  it('keeps recent pages in the list when the sidebar limit hides them', () => {
+  it('keeps all pages listed when the recent sidebar limit hides some', () => {
     const pages = [pageSummary('page-1'), pageSummary('page-2'), pageSummary('page-3')];
     const recent = [
       { id: 'page-1', title: 'Page 1', visitedAt: 3 },
@@ -195,8 +198,34 @@ describe('sidebar page lists', () => {
 
     expect(sidebarPageLists(pages, recent, 2)).toEqual({
       recentPages: recent.slice(0, 2),
-      otherPages: [pageSummary('page-3')],
+      allPages: pages,
     });
+  });
+});
+
+describe('recent page cookie', () => {
+  it('encodes ids in order without duplicates', () => {
+    const pages = [
+      { id: 'page-2', title: 'Page 2', visitedAt: 2 },
+      { id: 'page-1', title: 'Page 1', visitedAt: 1 },
+      { id: 'page-2', title: 'Page 2', visitedAt: 1 },
+    ];
+
+    expect(encodeRecentPageIds(pages)).toBe('page-2,page-1');
+    expect(parseRecentPageIds('page-2,page-1,page-2')).toEqual(['page-2', 'page-1']);
+  });
+
+  it('names the recent cookie per user', () => {
+    expect(recentPagesCookieName('user-a')).not.toBe(recentPagesCookieName('user-b'));
+    expect(recentPagesCookieName('user-a')).toContain('user-a');
+  });
+
+  it('drops recent pages that no longer exist', () => {
+    const pages = [pageSummary('page-1'), pageSummary('page-2')];
+
+    expect(
+      recentPagesFromIds(pages, ['deleted', 'page-2', 'page-1']).map((page) => page.id),
+    ).toEqual(['page-2', 'page-1']);
   });
 });
 

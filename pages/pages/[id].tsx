@@ -3,9 +3,23 @@ import { AppShell } from '../../src/components/AppShell';
 import { Editor } from '../../src/components/Editor';
 import { Gate } from '../../src/components/Gate';
 
-export default function PageView({ user, page, revisions, pages, linkTargets, loginUrl }: Props) {
+export default function PageView({
+  user,
+  page,
+  revisions,
+  pages,
+  recentPages,
+  linkTargets,
+  loginUrl,
+}: Props) {
   return (
-    <AppShell user={user} pages={pages} activePageId={page?.id} activeTitle={page?.title}>
+    <AppShell
+      user={user}
+      pages={pages}
+      initialRecentPages={recentPages}
+      activePageId={page?.id}
+      activeTitle={page?.title}
+    >
       {!user ? (
         <Gate
           title="ログインが必要です"
@@ -20,6 +34,7 @@ export default function PageView({ user, page, revisions, pages, linkTargets, lo
         />
       ) : (
         <Editor
+          key={page.id}
           page={page}
           user={user}
           revisions={revisions}

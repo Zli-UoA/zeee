@@ -11,7 +11,17 @@ import { Prec } from '@codemirror/state';
 import { keymap } from '@codemirror/view';
 import { markdown as markdownLanguage } from '@codemirror/lang-markdown';
 import { yCollab, yUndoManagerKeymap } from 'y-codemirror.next';
-import { Badge, Button, DropdownMenu, Empty, Input, LayerCard, Text } from '@cloudflare/kumo';
+import { useRouter } from '@void/react';
+import {
+  Badge,
+  Button,
+  DropdownMenu,
+  Empty,
+  Input,
+  LayerCard,
+  LayerDialog,
+  Text,
+} from '@cloudflare/kumo';
 import {
   ArrowClockwiseIcon,
   ArrowCounterClockwiseIcon,
@@ -65,7 +75,7 @@ const editorTheme = EditorView.theme({
   '.cm-content': {
     caretColor: 'var(--color-kumo-brand)',
     fontFamily: 'ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace',
-    fontSize: '15px',
+    fontSize: '14px',
     lineHeight: '1.9',
   },
   '.cm-line': {
@@ -83,6 +93,7 @@ const editorTheme = EditorView.theme({
 });
 
 export function Editor({ page, user, revisions, pages, linkTargets }: Props) {
+  const router = useRouter();
   const editorRef = useRef<HTMLDivElement>(null);
   const historyRef = useRef<HTMLDivElement>(null);
   const renderTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -98,6 +109,8 @@ export function Editor({ page, user, revisions, pages, linkTargets }: Props) {
   const [saveStatus, setSaveStatus] = useState<SaveStatus>({ state: 'saved', pending: 0 });
   const [users, setUsers] = useState<Collaborator[]>([]);
   const [busy, setBusy] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleteError, setDeleteError] = useState('');
   const [historyOpen, setHistoryOpen] = useState(false);
   const [previewRevision, setPreviewRevision] = useState<RevisionRecord | null>(null);
   const [restoreBusy, setRestoreBusy] = useState(false);
@@ -353,15 +366,19 @@ export function Editor({ page, user, revisions, pages, linkTargets }: Props) {
   }
 
   async function remove() {
-    if (!window.confirm('このページと履歴を削除します。元に戻せません。')) return;
+    if (busy) return;
     setBusy(true);
-    const response = await fetch(`/api/pages/${page.id}`, { method: 'DELETE' });
-    if (!response.ok) {
-      setError('削除できませんでした');
+    setDeleteError('');
+    try {
+      const response = await fetch(`/api/pages/${page.id}`, { method: 'DELETE' });
+      if (!response.ok) throw new Error(`delete failed: ${response.status}`);
+      setDeleteOpen(false);
       setBusy(false);
-      return;
+      void router.visit('/');
+    } catch {
+      setDeleteError('ページをゴミ箱に移動できませんでした。もう一度お試しください。');
+      setBusy(false);
     }
-    window.location.href = '/';
   }
 
   const others = users.filter((item) => item.name !== user.displayName);
@@ -373,7 +390,7 @@ export function Editor({ page, user, revisions, pages, linkTargets }: Props) {
           historyOpen ? 'flex flex-col gap-3 xl:pe-[calc(280px+1rem)]' : 'flex flex-col gap-3'
         }
       >
-        <div className="zeee-column flex flex-col gap-2 px-5 sm:flex-row sm:items-center sm:gap-3 sm:px-0">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
           <div className="min-w-0 sm:flex-1">
             {mode === 'edit' ? (
               <Input
@@ -394,7 +411,7 @@ export function Editor({ page, user, revisions, pages, linkTargets }: Props) {
             ) : (
               <div className="flex h-10 items-center">
                 <h1
-                  className="w-full truncate text-2xl font-semibold tracking-tight text-kumo-strong"
+                  className="w-full truncate text-2xl font-semibold text-kumo-strong"
                   title={title}
                 >
                   {title || '無題'}
@@ -456,7 +473,10 @@ export function Editor({ page, user, revisions, pages, linkTargets }: Props) {
                   <DropdownMenu.Item
                     variant="danger"
                     icon={<TrashIcon size={16} />}
-                    onClick={() => void remove()}
+                    onClick={() => {
+                      setDeleteError('');
+                      setDeleteOpen(true);
+                    }}
                     disabled={busy}
                   >
                     ページを削除
@@ -487,9 +507,26 @@ export function Editor({ page, user, revisions, pages, linkTargets }: Props) {
             : 'grid grid-cols-1 gap-4'
         }
       >
-        <LayerCard className={mode === 'read' ? 'p-0' : 'overflow-hidden p-0'}>
-          {mode === 'read' ? (
-            markdown.trim() ? (
+        {mode === 'read' && !markdown.trim() ? (
+          <Empty
+            className="min-h-[60svh] justify-center lg:min-h-[calc(100vh-18rem)]"
+            icon={<PencilSimpleIcon size={28} />}
+            title="本文はまだありません"
+            description="編集モードで書き始めましょう。"
+            contents={
+              <Button
+                type="button"
+                variant="primary"
+                icon={<PencilSimpleIcon size={15} />}
+                onClick={() => setMode('edit')}
+              >
+                本文を書く
+              </Button>
+            }
+          />
+        ) : (
+          <LayerCard className={mode === 'read' ? 'p-0' : 'overflow-hidden p-0'}>
+            {mode === 'read' ? (
               <MarkdownView
                 markdown={markdown}
                 pages={pages}
@@ -499,33 +536,15 @@ export function Editor({ page, user, revisions, pages, linkTargets }: Props) {
                 sidePanel={!historyOpen}
               />
             ) : (
-              <div className="min-h-[60svh] px-5 py-7 sm:px-8 sm:py-9 lg:min-h-[calc(100vh-18rem)]">
-                <Empty
-                  icon={<PencilSimpleIcon size={28} />}
-                  title="本文はまだありません"
-                  description="編集モードで書き始めましょう。"
-                  contents={
-                    <Button
-                      type="button"
-                      variant="primary"
-                      icon={<PencilSimpleIcon size={15} />}
-                      onClick={() => setMode('edit')}
-                    >
-                      本文を書く
-                    </Button>
-                  }
+              <div className="flex min-h-[60svh] flex-col px-5 py-7 sm:px-8 sm:py-9 lg:min-h-[calc(100vh-18rem)]">
+                <div
+                  className="min-h-[calc(60svh-3.5rem)] w-full max-w-[36.5rem] flex-1 lg:min-h-[calc(100vh-18rem-4.5rem)]"
+                  ref={editorRef}
                 />
               </div>
-            )
-          ) : (
-            <div className="flex min-h-[60svh] flex-col px-5 py-7 sm:px-8 sm:py-9 lg:min-h-[calc(100vh-18rem)]">
-              <div
-                className="zeee-column min-h-[calc(60svh-3.5rem)] flex-1 lg:min-h-[calc(100vh-18rem-4.5rem)]"
-                ref={editorRef}
-              />
-            </div>
-          )}
-        </LayerCard>
+            )}
+          </LayerCard>
+        )}
 
         {historyOpen ? (
           <div ref={historyRef} className="scroll-mt-20 self-start xl:sticky xl:top-20">
@@ -567,6 +586,7 @@ export function Editor({ page, user, revisions, pages, linkTargets }: Props) {
                 {revisions.length === 0 ? (
                   <Empty
                     size="sm"
+                    className="border-0 bg-transparent"
                     icon={<ClockCounterClockwiseIcon size={28} />}
                     title="履歴はまだありません"
                     description="編集内容は自動で保存されます。"
@@ -605,20 +625,51 @@ export function Editor({ page, user, revisions, pages, linkTargets }: Props) {
         ) : null}
       </div>
 
-      {previewRevision ? (
-        <RevisionPreview
-          revision={previewRevision}
-          currentMarkdown={collaboration?.text.toJSON() ?? markdown}
-          busy={restoreBusy}
-          error={restoreError}
-          onOpenChange={(open) => {
-            if (open || restoreBusy) return;
-            setPreviewRevision(null);
-            setRestoreError('');
-          }}
-          onConfirm={() => void restoreRevision()}
-        />
-      ) : null}
+      <LayerDialog.Root
+        open={deleteOpen}
+        onOpenChange={(next) => {
+          if (busy) return;
+          setDeleteOpen(next);
+          if (!next) setDeleteError('');
+        }}
+        dismissDisabled={busy}
+      >
+        <LayerDialog.Content size="sm" verticalAlign="center" closeLabel="閉じる">
+          <LayerDialog.Title>「{title || '無題'}」を削除しますか？</LayerDialog.Title>
+          <LayerDialog.Description>
+            ページはゴミ箱に移動します。必要な場合はゴミ箱から復元できます。
+          </LayerDialog.Description>
+          <LayerDialog.Body>
+            {deleteError ? (
+              <Text variant="error" size="sm">
+                {deleteError}
+              </Text>
+            ) : (
+              <Text variant="secondary" size="sm">
+                履歴も保持されます。完全に削除する場合は、ゴミ箱から操作してください。
+              </Text>
+            )}
+          </LayerDialog.Body>
+          <LayerDialog.Actions dismissLabel="キャンセル">
+            <LayerDialog.Action variant="destructive" onClick={() => void remove()} loading={busy}>
+              ゴミ箱に移動
+            </LayerDialog.Action>
+          </LayerDialog.Actions>
+        </LayerDialog.Content>
+      </LayerDialog.Root>
+
+      <RevisionPreview
+        revision={previewRevision}
+        currentMarkdown={previewRevision ? (collaboration?.text.toJSON() ?? markdown) : ''}
+        busy={restoreBusy}
+        error={restoreError}
+        onOpenChange={(open) => {
+          if (open || restoreBusy) return;
+          setPreviewRevision(null);
+          setRestoreError('');
+        }}
+        onConfirm={() => void restoreRevision()}
+      />
     </div>
   );
 }

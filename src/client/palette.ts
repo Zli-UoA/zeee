@@ -1,7 +1,5 @@
 import type { RecentPage } from './useRecentPages';
 
-export type PaletteIntent = 'search' | 'create';
-
 export type PaletteSearchResult = {
   id: string;
   title: string;
@@ -11,7 +9,6 @@ export type PaletteSearchResult = {
 
 export type PaletteAction =
   | { kind: 'recent'; page: RecentPage }
-  | { kind: 'create'; title: string }
   | { kind: 'result'; result: PaletteSearchResult }
   | { kind: 'all'; query: string };
 
@@ -21,7 +18,6 @@ type BuildPaletteActionsInput = {
   resultsQuery: string | null;
   loading: boolean;
   error: string | null;
-  intent: PaletteIntent;
   recentPages: RecentPage[];
 };
 
@@ -50,21 +46,15 @@ export function buildPaletteActions({
   resultsQuery,
   loading,
   error,
-  intent,
   recentPages,
 }: BuildPaletteActionsInput): PaletteAction[] {
   if (trimmedQuery) {
     if (loading || error || resultsQuery !== trimmedQuery) return [];
 
-    const createAction: PaletteAction = { kind: 'create', title: trimmedQuery };
     const allAction: PaletteAction = { kind: 'all', query: trimmedQuery };
     const resultActions = results.map((result): PaletteAction => ({ kind: 'result', result }));
-
-    return resultActions.length > 0
-      ? [...resultActions, allAction, createAction]
-      : [createAction, allAction];
+    return [...resultActions, allAction];
   }
 
-  if (intent === 'create') return [{ kind: 'create', title: '' }];
   return recentPages.map((page): PaletteAction => ({ kind: 'recent', page }));
 }

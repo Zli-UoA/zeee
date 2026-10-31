@@ -1,10 +1,10 @@
-import type { ReactNode } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Badge, LayerDialog, Text } from '@cloudflare/kumo';
 import type { RevisionRecord } from '../server/types';
 import { formatDate } from '../shared/format';
 
 type Props = {
-  revision: RevisionRecord;
+  revision: RevisionRecord | null;
   currentMarkdown: string;
   busy: boolean;
   error: string;
@@ -28,72 +28,83 @@ export function RevisionPreview({
   onOpenChange,
   onConfirm,
 }: Props) {
-  const diff = buildDiff(currentMarkdown, revision.markdown);
+  const [shownRevision, setShownRevision] = useState<RevisionRecord | null>(revision);
+  useEffect(() => {
+    if (revision) setShownRevision(revision);
+  }, [revision]);
+
+  const shown = revision ?? shownRevision;
+  const diff = useMemo(
+    () => (revision ? buildDiff(currentMarkdown, revision.markdown) : null),
+    [revision, currentMarkdown],
+  );
   const added = diff?.filter((line) => line.kind === 'add').length ?? 0;
   const removed = diff?.filter((line) => line.kind === 'remove').length ?? 0;
   const changed = added > 0 || removed > 0;
 
   return (
     <LayerDialog.Root
-      open
+      open={revision !== null}
       onOpenChange={(next) => {
         if (!busy) onOpenChange(next);
       }}
       dismissDisabled={busy}
     >
-      <LayerDialog.Content size="xl" verticalAlign="center" closeLabel="閉じる">
-        <LayerDialog.Title>v{revision.version} に戻す</LayerDialog.Title>
-        <LayerDialog.Description>
-          現在の本文をこの版の内容に置き換えます。復元後の内容は新しい版として保存されます。
-        </LayerDialog.Description>
-        <LayerDialog.Body>
-          <div className="flex flex-col gap-3">
-            <div className="flex flex-wrap items-center gap-2">
-              <Badge variant={revision.manual ? 'info' : 'outline'}>
-                {revision.manual ? '手動保存' : '自動保存'}
-              </Badge>
-              <Text variant="mono-secondary">{formatDate(revision.createdAt)}</Text>
-              {diff ? (
-                <Text variant="secondary" size="sm">
-                  現在との差分: +{added} / -{removed} 行
-                </Text>
-              ) : null}
-            </div>
-
-            {error ? (
-              <div role="alert">
-                <Text variant="error" size="sm">
-                  {error}
-                </Text>
+      {shown ? (
+        <LayerDialog.Content size="xl" verticalAlign="center" closeLabel="閉じる">
+          <LayerDialog.Title>v{shown.version} に戻す</LayerDialog.Title>
+          <LayerDialog.Description>
+            現在の本文をこの版の内容に置き換えます。復元後の内容は新しい版として保存されます。
+          </LayerDialog.Description>
+          <LayerDialog.Body>
+            <div className="flex flex-col gap-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <Badge variant={shown.manual ? 'info' : 'outline'}>
+                  {shown.manual ? '手動保存' : '自動保存'}
+                </Badge>
+                <Text variant="mono-secondary">{formatDate(shown.createdAt)}</Text>
+                {diff ? (
+                  <Text variant="secondary" size="sm">
+                    現在との差分: +{added} / -{removed} 行
+                  </Text>
+                ) : null}
               </div>
-            ) : null}
 
-            <div className="overflow-hidden rounded-md border border-kumo-line">
-              {diff && changed ? (
-                <div className="max-h-[45svh] overflow-y-auto bg-kumo-recessed py-2 font-mono text-xs leading-relaxed">
-                  {renderDiff(diff)}
+              {error ? (
+                <div role="alert">
+                  <Text variant="error" size="sm">
+                    {error}
+                  </Text>
                 </div>
-              ) : (
-                <>
-                  <div className="border-b border-kumo-line bg-kumo-tint px-3 py-1.5">
-                    <Text variant="secondary" size="sm">
-                      {diff ? '現在の本文と同じ内容です' : '本文プレビュー'}
-                    </Text>
+              ) : null}
+
+              <div className="overflow-hidden rounded-md border border-kumo-line">
+                {diff && changed ? (
+                  <div className="max-h-[45svh] overflow-y-auto bg-kumo-recessed py-2 font-mono text-sm leading-relaxed">
+                    {renderDiff(diff)}
                   </div>
-                  <pre className="max-h-[45svh] overflow-y-auto whitespace-pre-wrap break-words bg-kumo-recessed px-3 py-2 font-mono text-xs leading-relaxed text-kumo-default">
-                    {revision.markdown || '（空の本文）'}
-                  </pre>
-                </>
-              )}
+                ) : (
+                  <>
+                    <div className="border-b border-kumo-line bg-kumo-tint px-3 py-1.5">
+                      <Text variant="secondary" size="sm">
+                        {diff ? '現在の本文と同じ内容です' : '本文プレビュー'}
+                      </Text>
+                    </div>
+                    <pre className="max-h-[45svh] overflow-y-auto whitespace-pre-wrap break-words bg-kumo-recessed px-3 py-2 font-mono text-sm leading-relaxed text-kumo-default">
+                      {shown.markdown || '（空の本文）'}
+                    </pre>
+                  </>
+                )}
+              </div>
             </div>
-          </div>
-        </LayerDialog.Body>
-        <LayerDialog.Actions dismissLabel="キャンセル">
-          <LayerDialog.Action onClick={onConfirm} loading={busy}>
-            {error ? '再試行' : 'この版に戻す'}
-          </LayerDialog.Action>
-        </LayerDialog.Actions>
-      </LayerDialog.Content>
+          </LayerDialog.Body>
+          <LayerDialog.Actions dismissLabel="キャンセル">
+            <LayerDialog.Action onClick={onConfirm} loading={busy}>
+              {error ? '再試行' : 'この版に戻す'}
+            </LayerDialog.Action>
+          </LayerDialog.Actions>
+        </LayerDialog.Content>
+      ) : null}
     </LayerDialog.Root>
   );
 }

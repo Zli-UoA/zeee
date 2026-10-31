@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { Link } from '@void/react';
 import { Button, Empty, LayerCard, LayerDialog, LinkButton, Text } from '@cloudflare/kumo';
 import { ArrowCounterClockwiseIcon, TrashIcon } from '@phosphor-icons/react';
 import type { Props } from './trash.server';
@@ -14,16 +15,22 @@ type Notice = { kind: 'restored'; id: string; title: string } | { kind: 'purged'
 export default function TrashPage({
   user,
   pages,
+  recentPages,
   deletedPages: initialDeletedPages,
   loginUrl,
 }: Props) {
   const [deletedPages, setDeletedPages] = useState(initialDeletedPages);
   const [pending, setPending] = useState<Pending>(null);
   const [confirming, setConfirming] = useState<DeletedPageSummary | null>(null);
+  const [shownConfirming, setShownConfirming] = useState<DeletedPageSummary | null>(null);
   const [error, setError] = useState('');
   const [dialogError, setDialogError] = useState('');
   const [notice, setNotice] = useState<Notice | null>(null);
   const purgeBusy = pending?.action === 'purge';
+
+  useEffect(() => {
+    if (confirming) setShownConfirming(confirming);
+  }, [confirming]);
 
   async function restore(page: DeletedPageSummary) {
     if (pending) return;
@@ -80,7 +87,13 @@ export default function TrashPage({
   }
 
   return (
-    <AppShell user={user} pages={pages} activeTitle="ゴミ箱" activeNav="trash">
+    <AppShell
+      user={user}
+      pages={pages}
+      initialRecentPages={recentPages}
+      activeTitle="ゴミ箱"
+      activeNav="trash"
+    >
       {!user ? (
         <Gate
           title="ログインが必要です"
@@ -112,12 +125,12 @@ export default function TrashPage({
                 {notice.kind === 'restored' ? (
                   <>
                     {' '}
-                    <a
+                    <Link
                       className="rounded-sm text-kumo-link focus-visible:ring-2 focus-visible:ring-kumo-brand focus-visible:outline-none"
                       href={`/pages/${notice.id}`}
                     >
                       ページを開く
-                    </a>
+                    </Link>
                   </>
                 ) : null}
               </Text>
@@ -133,18 +146,16 @@ export default function TrashPage({
           ) : null}
 
           {deletedPages.length === 0 ? (
-            <LayerCard className="p-0">
-              <Empty
-                icon={<TrashIcon size={32} />}
-                title="ゴミ箱は空です"
-                description="ページを削除すると、ここに表示されます。"
-                contents={
-                  <LinkButton href="/" variant="secondary">
-                    ページ一覧へ戻る
-                  </LinkButton>
-                }
-              />
-            </LayerCard>
+            <Empty
+              icon={<TrashIcon size={32} />}
+              title="ゴミ箱は空です"
+              description="ページを削除すると、ここに表示されます。"
+              contents={
+                <LinkButton href="/" variant="secondary">
+                  ページ一覧へ戻る
+                </LinkButton>
+              }
+            />
           ) : (
             <LayerCard className="overflow-hidden p-0">
               <ul aria-label="削除済みのページ" className="divide-y divide-kumo-line">
@@ -158,7 +169,7 @@ export default function TrashPage({
                       {page.excerpt ? (
                         <p className="line-clamp-1 text-sm text-kumo-subtle">{page.excerpt}</p>
                       ) : null}
-                      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-kumo-subtle">
+                      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-kumo-subtle">
                         <span>
                           <span className="sr-only">削除日時 </span>
                           <time dateTime={new Date(page.deletedAt).toISOString()}>
@@ -215,19 +226,19 @@ export default function TrashPage({
         </div>
       )}
 
-      {confirming ? (
-        <LayerDialog.Root
-          open
-          onOpenChange={(open) => {
-            if (!open && !purgeBusy) {
-              setConfirming(null);
-              setDialogError('');
-            }
-          }}
-          dismissDisabled={purgeBusy}
-        >
+      <LayerDialog.Root
+        open={confirming !== null}
+        onOpenChange={(open) => {
+          if (!open && !purgeBusy) {
+            setConfirming(null);
+            setDialogError('');
+          }
+        }}
+        dismissDisabled={purgeBusy}
+      >
+        {shownConfirming ? (
           <LayerDialog.Content size="sm" verticalAlign="center" closeLabel="閉じる">
-            <LayerDialog.Title>「{confirming.title}」を完全に削除しますか？</LayerDialog.Title>
+            <LayerDialog.Title>「{shownConfirming.title}」を完全に削除しますか？</LayerDialog.Title>
             <LayerDialog.Description>
               本文とすべての履歴を削除します。この操作は元に戻せません。
             </LayerDialog.Description>
@@ -247,15 +258,15 @@ export default function TrashPage({
             <LayerDialog.Actions dismissLabel="キャンセル">
               <LayerDialog.Action
                 variant="destructive"
-                onClick={() => void purge(confirming)}
+                onClick={() => void purge(shownConfirming)}
                 loading={purgeBusy}
               >
                 完全に削除
               </LayerDialog.Action>
             </LayerDialog.Actions>
           </LayerDialog.Content>
-        </LayerDialog.Root>
-      ) : null}
+        ) : null}
+      </LayerDialog.Root>
     </AppShell>
   );
 }

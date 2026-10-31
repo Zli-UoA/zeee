@@ -1,5 +1,7 @@
+import type { FormEvent } from 'react';
 import type { Props } from './index.server';
-import { Button, ButtonGroup, Empty, Input, LayerCard, LinkButton, Text } from '@cloudflare/kumo';
+import { Link, useRouter } from '@void/react';
+import { Button, Empty, Input, LayerCard, Select, Text } from '@cloudflare/kumo';
 import { FilesIcon, MagnifyingGlassIcon, PlusIcon } from '@phosphor-icons/react';
 import { AppShell } from '../src/components/AppShell';
 import { Gate } from '../src/components/Gate';
@@ -44,14 +46,28 @@ export default function Home({
   user,
   pages,
   sidebarPages,
+  recentPages,
   query,
   sort,
   results,
   now,
   loginUrl,
 }: Props) {
+  const router = useRouter();
+
+  function submitSearch(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const entry = new FormData(event.currentTarget).get('q');
+    const value = typeof entry === 'string' ? entry.trim() : '';
+    const params = new URLSearchParams();
+    if (value) params.set('q', value);
+    if (sort !== 'updated') params.set('sort', sort);
+    const search = params.toString();
+    void router.visit(search ? `/?${search}` : '/');
+  }
+
   return (
-    <AppShell user={user} pages={sidebarPages} query={query}>
+    <AppShell user={user} pages={sidebarPages} initialRecentPages={recentPages} query={query}>
       {!user ? (
         <Gate
           title="Zeee は Zli のための知識ベース"
@@ -60,23 +76,61 @@ export default function Home({
         />
       ) : (
         <div className="flex flex-col gap-6">
-          <div className="flex flex-col gap-1">
-            <Text variant="heading" size="lg" as="h1">
-              {query ? '検索結果' : 'ページ'}
-            </Text>
-            <Text variant="secondary" size="sm">
-              {query ? `「${query}」に一致するページ ${results.length}件` : `${pages.length}ページ`}
-            </Text>
-            {!query && pages.length >= PAGE_LIST_LIMIT ? (
-              <Text variant="secondary" size="sm">
-                最新{PAGE_LIST_LIMIT}件を表示しています。
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div className="flex min-w-0 flex-col gap-1">
+              <Text variant="heading" size="lg" as="h1">
+                {query ? '検索結果' : 'ページ'}
               </Text>
+              <Text variant="secondary" size="sm">
+                {query
+                  ? `「${query}」に一致するページ ${results.length}件`
+                  : `${pages.length}ページ`}
+              </Text>
+              {!query && pages.length >= PAGE_LIST_LIMIT ? (
+                <Text variant="secondary" size="sm">
+                  最新{PAGE_LIST_LIMIT}件を表示しています。
+                </Text>
+              ) : null}
+            </div>
+
+            {!query && pages.length > 0 ? (
+              <div className="flex shrink-0 items-center gap-2">
+                <Text as="span" variant="secondary" size="sm" id="page-sort-label">
+                  並び順
+                </Text>
+                <Select
+                  value={sort}
+                  onValueChange={(value) => {
+                    if (typeof value !== 'string' || value === sort) return;
+                    void router.visit(indexHref(value as PageSort, query));
+                  }}
+                  aria-labelledby="page-sort-label"
+                  size="sm"
+                  renderValue={(value) =>
+                    SORT_OPTIONS.find((option) => option.value === value)?.label ?? '更新順'
+                  }
+                  className="w-32"
+                >
+                  {SORT_OPTIONS.map((option) => (
+                    <Select.Option key={option.value} value={option.value}>
+                      {option.label}
+                    </Select.Option>
+                  ))}
+                </Select>
+              </div>
             ) : null}
           </div>
 
-          <form method="get" action="/" role="search" className="flex items-center gap-2 lg:hidden">
+          <form
+            method="get"
+            action="/"
+            role="search"
+            className="flex items-center gap-2 lg:hidden"
+            onSubmit={submitSearch}
+          >
             {sort !== 'updated' ? <input type="hidden" name="sort" value={sort} /> : null}
             <Input
+              key={query}
               name="q"
               type="search"
               defaultValue={query}
@@ -94,86 +148,54 @@ export default function Home({
             />
           </form>
 
-          {!query && pages.length > 0 ? (
-            <nav aria-label="並び順" className="flex flex-wrap items-center gap-2">
-              <Text as="span" variant="secondary" size="sm" id="page-sort-label">
-                並び順
-              </Text>
-              <ButtonGroup aria-labelledby="page-sort-label">
-                {SORT_OPTIONS.map((option) => {
-                  const active = option.value === sort;
-                  return (
-                    <LinkButton
-                      key={option.value}
-                      href={indexHref(option.value, query)}
-                      size="sm"
-                      variant={active ? 'primary' : 'secondary'}
-                      aria-current={active ? 'true' : undefined}
-                    >
-                      {option.label}
-                    </LinkButton>
-                  );
-                })}
-              </ButtonGroup>
-            </nav>
-          ) : null}
-
           {query && results.length === 0 ? (
-            <LayerCard className="p-0">
-              <Empty
-                icon={<MagnifyingGlassIcon size={32} />}
-                title="該当なし"
-                description={`「${query}」に一致するページはありません。このタイトルで新規作成できます。`}
-                contents={
-                  <div className="flex w-full max-w-sm flex-col items-center gap-3">
-                    <form method="post" action="/" className="flex w-full items-center gap-2">
-                      <Input
-                        name="title"
-                        defaultValue={query}
-                        placeholder="ページタイトル"
-                        aria-label="新しいページのタイトル"
-                        required
-                        maxLength={200}
-                        className="min-w-0 flex-1"
-                      />
-                      <Button type="submit" variant="primary" icon={<PlusIcon size={14} />}>
-                        作成
-                      </Button>
-                    </form>
-                    <a className="text-sm text-kumo-link" href="/">
-                      ページ一覧に戻る
-                    </a>
-                  </div>
-                }
-              />
-            </LayerCard>
-          ) : !query && pages.length === 0 ? (
-            <LayerCard className="p-0">
-              <Empty
-                icon={<FilesIcon size={32} />}
-                title="まだページがありません"
-                description="新しいページを作成してください。"
-                contents={
-                  <form
-                    method="post"
-                    action="/"
-                    className="flex w-full max-w-sm items-center gap-2"
-                  >
+            <Empty
+              icon={<MagnifyingGlassIcon size={32} />}
+              title="該当なし"
+              description={`「${query}」に一致するページはありません。このタイトルで新規作成できます。`}
+              contents={
+                <div className="flex w-full max-w-sm flex-col items-center gap-3">
+                  <form method="post" action="/" className="flex w-full items-center gap-2">
                     <Input
                       name="title"
+                      defaultValue={query}
                       placeholder="ページタイトル"
                       aria-label="新しいページのタイトル"
                       required
                       maxLength={200}
                       className="min-w-0 flex-1"
                     />
-                    <Button type="submit" variant="primary">
+                    <Button type="submit" variant="primary" icon={<PlusIcon size={14} />}>
                       作成
                     </Button>
                   </form>
-                }
-              />
-            </LayerCard>
+                  <Link className="text-sm text-kumo-link" href="/">
+                    ページ一覧に戻る
+                  </Link>
+                </div>
+              }
+            />
+          ) : !query && pages.length === 0 ? (
+            <Empty
+              icon={<FilesIcon size={32} />}
+              title="まだページがありません"
+              description="新しいページを作成してください。"
+              contents={
+                <form method="post" action="/" className="flex w-full max-w-sm items-center gap-2">
+                  <Input
+                    name="title"
+                    placeholder="ページタイトル"
+                    aria-label="新しいページのタイトル"
+                    required
+                    maxLength={200}
+                    className="min-w-0 flex-1"
+                  />
+                  <Button type="submit" variant="primary">
+                    作成
+                  </Button>
+                </form>
+              }
+            />
           ) : query ? (
             <LayerCard className="overflow-hidden p-0">
               <ul className="divide-y divide-kumo-line">
@@ -287,7 +309,7 @@ function PageRow({
   const timestamp = page[dateField];
   return (
     <li>
-      <a
+      <Link
         className="flex flex-col gap-1.5 px-4 py-3 no-underline hover:bg-kumo-tint focus-visible:ring-2 focus-visible:ring-kumo-brand focus-visible:ring-inset focus-visible:outline-none"
         href={`/pages/${page.id}`}
       >
@@ -295,7 +317,7 @@ function PageRow({
         <span className="line-clamp-2 text-sm text-kumo-subtle">
           {page.excerpt || '本文はまだありません'}
         </span>
-        <span className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-kumo-subtle">
+        <span className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-kumo-subtle">
           <span className="max-w-full truncate">{page.createdByName || '不明なユーザー'}</span>
           <span aria-hidden="true">·</span>
           <span>
@@ -303,7 +325,7 @@ function PageRow({
             <time dateTime={new Date(timestamp).toISOString()}>{formatDate(timestamp)}</time>
           </span>
         </span>
-      </a>
+      </Link>
     </li>
   );
 }
@@ -311,7 +333,7 @@ function PageRow({
 function SearchResultRow({ result, query }: { result: SearchResult; query: string }) {
   return (
     <li>
-      <a
+      <Link
         className="flex flex-col gap-1.5 px-4 py-3 no-underline hover:bg-kumo-tint focus-visible:ring-2 focus-visible:ring-kumo-brand focus-visible:ring-inset focus-visible:outline-none"
         href={`/pages/${result.id}`}
       >
@@ -321,13 +343,13 @@ function SearchResultRow({ result, query }: { result: SearchResult; query: strin
         <span className="line-clamp-2 text-sm text-kumo-subtle">
           <Highlight text={result.excerpt || '本文はまだありません'} query={query} />
         </span>
-        <span className="text-xs text-kumo-subtle">
+        <span className="text-sm text-kumo-subtle">
           <span className="sr-only">更新日時 </span>
           <time dateTime={new Date(result.updatedAt).toISOString()}>
             {formatDate(result.updatedAt)}
           </time>
         </span>
-      </a>
+      </Link>
     </li>
   );
 }

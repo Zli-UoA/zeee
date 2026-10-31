@@ -9,6 +9,7 @@ import {
   type MouseEvent,
   type ReactNode,
 } from 'react';
+import { Link, useRouter } from '@void/react';
 import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeSanitize, { defaultSchema } from 'rehype-sanitize';
@@ -116,6 +117,14 @@ export function MarkdownView({
           return <MissingWikiLink title={wikiTitle}>{children}</MissingWikiLink>;
         }
         const external = href?.startsWith('http://') || href?.startsWith('https://');
+        const internal = href?.startsWith('/') && !href.startsWith('//');
+        if (internal && href) {
+          return (
+            <Link href={href} className={state === 'resolved' ? 'zeee-wiki-link' : undefined}>
+              {children}
+            </Link>
+          );
+        }
         return (
           <a
             href={href}
@@ -157,27 +166,27 @@ export function MarkdownView({
   );
 
   const hasToc = toc.length > 0;
+  const hasHeadingMarkdown = useMemo(() => markdownHasHeadings(markdown), [markdown]);
+  const showMobileToc = hasToc || hasHeadingMarkdown;
   const hasBacklinks = (backlinks?.length ?? 0) > 0;
-  const showSidePanel = sidePanel;
+  const showSidePanel = sidePanel && (hasToc || hasBacklinks || backlinksError);
 
   return (
     <div className="min-h-[60svh] px-5 py-7 sm:px-8 sm:py-9 lg:min-h-[calc(100vh-18rem)]">
       <div
         className={
           showSidePanel
-            ? 'xl:grid xl:grid-cols-[minmax(0,36.5rem)_13rem] xl:items-start xl:justify-center xl:gap-10'
+            ? 'xl:grid xl:grid-cols-[minmax(0,36.5rem)_13rem] xl:items-start xl:gap-10'
             : undefined
         }
       >
         <div className="min-w-0">
-          {hasToc ? (
-            <details className="mb-5 rounded-lg border border-kumo-line bg-kumo-recessed xl:hidden">
-              <summary className="cursor-pointer px-3 py-2 text-sm font-medium text-kumo-strong">
+          {showMobileToc ? (
+            <details className="mb-5 border-b border-kumo-line pb-3 xl:hidden">
+              <summary className="cursor-pointer py-2 text-sm font-medium text-kumo-strong">
                 目次
               </summary>
-              <div className="px-3 pb-3">
-                <TocNav items={toc} />
-              </div>
+              <div className="pt-2">{hasToc ? <TocNav items={toc} /> : null}</div>
             </details>
           ) : null}
 
@@ -196,11 +205,11 @@ export function MarkdownView({
           </article>
 
           {hasBacklinks ? (
-            <details className="mt-6 rounded-lg border border-kumo-line bg-kumo-recessed xl:hidden">
-              <summary className="cursor-pointer px-3 py-2 text-sm font-medium text-kumo-strong">
+            <details className="mt-6 border-t border-kumo-line pt-4 xl:hidden">
+              <summary className="cursor-pointer py-2 text-sm font-medium text-kumo-strong">
                 バックリンク（{backlinks?.length ?? 0}）
               </summary>
-              <div className="px-3 pb-3">
+              <div className="pt-2">
                 <BacklinkList backlinks={backlinks} />
               </div>
             </details>
@@ -229,9 +238,7 @@ export function MarkdownView({
           <aside className="hidden self-start xl:sticky xl:top-20 xl:block">
             {hasToc ? (
               <section aria-label="目次" className="mb-6">
-                <h2 className="mb-2 text-xs font-semibold tracking-wide text-kumo-subtle uppercase">
-                  目次
-                </h2>
+                <h2 className="mb-2 text-sm font-semibold text-kumo-subtle">目次</h2>
                 <TocNav items={toc} />
               </section>
             ) : null}
@@ -239,9 +246,7 @@ export function MarkdownView({
             {hasBacklinks || backlinksError ? (
               <section aria-label="バックリンク">
                 <div className="mb-2 flex items-center gap-2">
-                  <h2 className="text-xs font-semibold tracking-wide text-kumo-subtle uppercase">
-                    バックリンク
-                  </h2>
+                  <h2 className="text-sm font-semibold text-kumo-subtle">バックリンク</h2>
                   {hasBacklinks ? <Badge variant="outline">{backlinks?.length}</Badge> : null}
                 </div>
                 {backlinksError ? (
@@ -320,15 +325,15 @@ function BacklinkList({ backlinks }: { backlinks: Backlink[] | null }) {
     <ul className="flex flex-col gap-3">
       {backlinks.map((backlink) => (
         <li key={backlink.id}>
-          <a
+          <Link
             href={`/pages/${backlink.id}`}
             className="block text-sm font-medium text-kumo-link no-underline hover:underline"
           >
             {backlink.title}
-          </a>
-          <p className="mt-0.5 text-xs leading-relaxed text-kumo-subtle">{backlink.excerpt}</p>
+          </Link>
+          <p className="mt-0.5 text-sm leading-relaxed text-kumo-subtle">{backlink.excerpt}</p>
           {backlink.authorName ? (
-            <p className="mt-0.5 text-[11px] text-kumo-subtle">{backlink.authorName}</p>
+            <p className="mt-0.5 text-sm text-kumo-subtle">{backlink.authorName}</p>
           ) : null}
         </li>
       ))}
@@ -364,6 +369,7 @@ function Heading({
 }
 
 function MissingWikiLink({ title, children }: { title: string; children?: ReactNode }) {
+  const router = useRouter();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
@@ -388,7 +394,7 @@ function MissingWikiLink({ title, children }: { title: string; children?: ReactN
         setBusy(false);
         return;
       }
-      window.location.assign(`/pages/${data.page.id}`);
+      void router.visit(`/pages/${data.page.id}`);
     } catch {
       setError('作成できませんでした。もう一度お試しください。');
       setBusy(false);
@@ -470,6 +476,14 @@ function CodeBlock({ node, children }: { node?: HastNode; children?: ReactNode }
         </p>
       ) : null}
     </div>
+  );
+}
+
+function markdownHasHeadings(markdown: string): boolean {
+  const text = markdown.replace(/^```[\s\S]*?^```[ \t]*$/gm, '');
+  return (
+    /^(?: {0,3}#{1,4})[ \t]+\S/m.test(text) ||
+    /^(?: {0,3}[^\n]+)\n(?: {0,3}[=-]+)[ \t]*$/m.test(text)
   );
 }
 
