@@ -1,5 +1,6 @@
 import type { CloudContext } from 'void';
 import { requestOrigin } from './cookies';
+import type { Env } from './types';
 
 export function pathParam(c: CloudContext, name: string): string {
   const value = c.req.param(name);
@@ -19,8 +20,16 @@ export function jsonError(
   return c.json({ error: message }, status);
 }
 
-export function sameOrigin(c: CloudContext): boolean {
-  const origin = c.req.header('origin');
+export function isAllowedOrigin(
+  origin: string | undefined,
+  requestUrlOrigin: string,
+  publicOrigin?: string,
+): boolean {
   if (!origin) return true;
-  return origin === requestOrigin(c);
+  return origin === requestUrlOrigin || origin === publicOrigin;
+}
+
+export function sameOrigin(c: CloudContext): boolean {
+  const env = c.env as Env;
+  return isAllowedOrigin(c.req.header('origin'), new URL(c.req.url).origin, env.PUBLIC_ORIGIN);
 }

@@ -6,6 +6,7 @@ export const DEV_SESSION_COOKIE = 'zeee_session';
 
 export function isSecureRequest(c: CloudContext): boolean {
   const env = c.env as Env;
+  if (env.ZEEE_DEV_AUTH === '1') return new URL(c.req.url).protocol === 'https:';
   if (env.PUBLIC_ORIGIN) return env.PUBLIC_ORIGIN.startsWith('https://');
   return new URL(c.req.url).protocol === 'https:';
 }
@@ -44,6 +45,7 @@ export function clearSessionCookie(c: CloudContext): void {
 
 export function requestOrigin(c: CloudContext): string {
   const env = c.env as Env;
+  if (env.ZEEE_DEV_AUTH === '1') return new URL(c.req.url).origin;
   return env.PUBLIC_ORIGIN ?? new URL(c.req.url).origin;
 }
 
