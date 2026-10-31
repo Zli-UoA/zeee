@@ -20,7 +20,7 @@ Zeee のアプリケーションは GitHub Actions で検証・デプロイす�
 - トリガー: `main` の CI 成功後（`workflow_run`）、または `workflow_dispatch`
 - 手動実行時は `ref` に commit SHA / branch / tag を指定できる（既定は `main`）
 - GitHub Environment `production` を使用
-- 本番 URL: <https://zeee.zli.works>
+- 本番 URL: <https://zeee.zli.works>（初回デプロイ前は 404）
 
 デプロイの流れ:
 
@@ -65,7 +65,7 @@ R2 secrets が未設定のままデプロイすると、deploy は skip され�
 `workflow_dispatch` の `ref` に戻したい commit SHA を指定して再デプロイする。
 
 - D1 のスキーマや本文、Durable Object の状態は自動では戻らない
-- R2 に object versioning はないため、データの巻き戻しは別途バックアップから行う
+- R2 の object versioning は前提にしていない。有効化状況は zoo2-infra 側の設定を確認し、データの巻き戻しは別途バックアップから行う
 - アプリケーションのロールバックとデータの復旧は分けて判断する
 
 ## セキュリティ

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vite-plus/test';
-import { sidebarPageLists } from '../src/components/AppShell';
 import { splitHighlight } from '../src/client/highlight';
 import { buildPaletteActions, normalizeSearchResults } from '../src/client/palette';
+import { sidebarPageLists } from '../src/client/sidebarPages';
 import {
   clearLegacyRecentPages,
   loadRecentPages,

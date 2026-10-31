@@ -9,11 +9,8 @@ import {
   TrashIcon,
 } from '@phosphor-icons/react';
 import { CommandPalette, type CommandPaletteIntent } from './CommandPalette';
-import {
-  RECENT_PAGES_SIDEBAR_LIMIT,
-  useRecentPages,
-  type RecentPage,
-} from '../client/useRecentPages';
+import { sidebarPageLists } from '../client/sidebarPages';
+import { useRecentPages } from '../client/useRecentPages';
 import type { PageSummary, SessionUser } from '../server/types';
 
 type NavSection = 'trash';
@@ -305,19 +302,6 @@ export function AppShell({
       />
     </Sidebar.Provider>
   );
-}
-
-export function sidebarPageLists(
-  pages: PageSummary[],
-  recentPages: RecentPage[],
-  limit = RECENT_PAGES_SIDEBAR_LIMIT,
-): { recentPages: RecentPage[]; otherPages: PageSummary[] } {
-  const visibleRecentPages = recentPages.slice(0, limit);
-  const recentIds = new Set(visibleRecentPages.map((page) => page.id));
-  return {
-    recentPages: visibleRecentPages,
-    otherPages: pages.filter((page) => !recentIds.has(page.id)),
-  };
 }
 
 function SkipToContent() {

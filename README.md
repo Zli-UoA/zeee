@@ -2,7 +2,7 @@
 
 Zli sharEd knowlEdgE。Zli のメンバー向けの、esa 的な Markdown ドキュメントツール。
 
-本番: <https://zeee.zli.works>
+本番: <https://zeee.zli.works>（初回デプロイが完了するまでは準備中のため 404 になる）
 
 ## 機能
 
@@ -84,7 +84,7 @@ pnpm build:celld # 本番と同じ celld 向けビルド
 
 R2 の secrets が未設定の場合、deploy は失敗ではなく skip され、GitHub Actions の Summary に案内が出る。初回は Environment `production` の secrets を設定したうえで `workflow_dispatch` を実行する。
 
-本番 URL は <https://zeee.zli.works>。R2 bucket、D1、celld の StatefulSet、Traefik、Cloudflare Tunnel などのインフラは [zoo2-infra](https://github.com/Zli-UoA/zoo2-infra) 側で管理する。このリポジトリはアプリケーションとデプロイ定義だけを持つ。
+本番 URL は <https://zeee.zli.works>。初回デプロイが完了して `/api/health` が通るまでは 404 になる。R2 bucket、D1、celld の StatefulSet、Traefik、Cloudflare Tunnel などのインフラは [zoo2-infra](https://github.com/Zli-UoA/zoo2-infra) 側で管理する。このリポジトリはアプリケーションとデプロイ定義だけを持つ。
 
 秘密情報や実際の credential はリポジトリに置かない。運用手順は [docs/operations.md](docs/operations.md) を参照。
 
