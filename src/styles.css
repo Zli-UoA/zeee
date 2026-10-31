@@ -232,3 +232,164 @@ body {
   margin-right: 0.45em;
   accent-color: var(--color-kumo-brand);
 }
+
+.zeee-prose :is(h2, h3, h4, h5, h6) {
+  position: relative;
+  scroll-margin-top: 5rem;
+}
+
+.zeee-heading-anchor {
+  margin-inline-start: 0.4em;
+  color: var(--text-color-kumo-subtle);
+  font-weight: 400;
+  text-decoration: none;
+  opacity: 0;
+}
+
+.zeee-prose :is(h2, h3, h4, h5, h6):hover .zeee-heading-anchor,
+.zeee-heading-anchor:focus-visible {
+  opacity: 1;
+}
+
+.zeee-wiki-link {
+  border-radius: 2px;
+}
+
+.zeee-wiki-missing-wrap {
+  display: inline;
+}
+
+.zeee-wiki-missing {
+  display: inline;
+  padding: 0 0.1em;
+  border: 0;
+  border-radius: 2px;
+  background: transparent;
+  color: var(--text-color-kumo-warning);
+  font: inherit;
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  text-underline-offset: 0.18em;
+  cursor: pointer;
+}
+
+.zeee-wiki-missing:hover {
+  background: var(--color-kumo-warning-tint);
+}
+
+.zeee-wiki-missing:disabled {
+  cursor: progress;
+  opacity: 0.7;
+}
+
+.zeee-wiki-status {
+  margin-inline-start: 0.35em;
+  color: var(--text-color-kumo-warning);
+  font-size: 0.8em;
+}
+
+.zeee-code-block {
+  position: relative;
+}
+
+.zeee-code-block pre {
+  margin: 1em 0;
+  padding-inline-end: 5rem;
+}
+
+.zeee-code-copy {
+  position: absolute;
+  top: 0.55rem;
+  right: 0.55rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.25rem 0.5rem;
+  border: 1px solid var(--color-kumo-line);
+  border-radius: 5px;
+  background: var(--color-kumo-base);
+  color: var(--text-color-kumo-subtle);
+  font-family: var(--font-sans);
+  font-size: 11px;
+  line-height: 1.4;
+  cursor: pointer;
+  opacity: 0.7;
+}
+
+.zeee-code-copy:hover,
+.zeee-code-copy:focus-visible {
+  color: var(--text-color-kumo-default);
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .zeee-code-copy {
+    opacity: 1;
+  }
+}
+
+.zeee-code-status {
+  margin: -0.6em 0 1em;
+  color: var(--text-color-kumo-warning);
+  font-size: 0.8em;
+}
+
+.zeee-prose .hljs {
+  color: var(--text-color-kumo-default);
+  background: transparent;
+}
+
+.zeee-prose .hljs-comment,
+.zeee-prose .hljs-quote {
+  color: #6b7280;
+  font-style: italic;
+}
+
+.zeee-prose .hljs-keyword,
+.zeee-prose .hljs-selector-tag,
+.zeee-prose .hljs-literal,
+.zeee-prose .hljs-doctag {
+  color: #9d3fa0;
+}
+
+.zeee-prose .hljs-string,
+.zeee-prose .hljs-regexp,
+.zeee-prose .hljs-addition {
+  color: #2f7d32;
+}
+
+.zeee-prose .hljs-number,
+.zeee-prose .hljs-symbol,
+.zeee-prose .hljs-bullet {
+  color: #b45309;
+}
+
+.zeee-prose .hljs-title,
+.zeee-prose .hljs-section,
+.zeee-prose .hljs-name {
+  color: #1d4ed8;
+}
+
+.zeee-prose .hljs-attr,
+.zeee-prose .hljs-attribute,
+.zeee-prose .hljs-variable,
+.zeee-prose .hljs-template-variable {
+  color: #0f766e;
+}
+
+.zeee-prose .hljs-built_in,
+.zeee-prose .hljs-type {
+  color: #7c3aed;
+}
+
+.zeee-prose .hljs-deletion {
+  color: #b91c1c;
+}
+
+.zeee-prose .hljs-emphasis {
+  font-style: italic;
+}
+
+.zeee-prose .hljs-strong {
+  font-weight: 600;
+}
