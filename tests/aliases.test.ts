@@ -186,7 +186,7 @@ describe('listLinkTargets', () => {
     expect(sql).toContain('WHERE deleted_at IS NULL');
     expect(sql).toContain('LIMIT 200');
     expect(sql).toContain('a.created_at DESC');
-    expect(sql).toContain('a.alias NOT IN (SELECT title FROM targets)');
+    expect(sql).toContain('a.alias NOT IN (SELECT title FROM page WHERE deleted_at IS NULL)');
     expect(targets).toEqual([
       { id: 'newer', title: 'Shared', updatedAt: 300, aliases: ['Latest Alias', 'Earlier Alias'] },
       { id: 'older', title: 'Shared', updatedAt: 100, aliases: [] },
@@ -220,6 +220,30 @@ describe('listLinkTargets', () => {
 
     expect(targets.find((target) => target.title === 'Current Title')?.aliases).toEqual([]);
     expect(targets.find((target) => target.title === 'New Title')?.aliases).toEqual(['Old Title']);
+  });
+
+  it('shadows aliases with current titles outside the 200-page window', async () => {
+    let sql = '';
+    const db = database((statement) => {
+      sql = statement;
+      const shadowsOnlyInWindow = statement.includes('a.alias NOT IN (SELECT title FROM targets)');
+      return {
+        results: [
+          {
+            id: 'renamed',
+            title: 'New Title',
+            updated_at: 500,
+            alias: shadowsOnlyInWindow ? 'Old Title' : null,
+          },
+        ],
+      };
+    });
+
+    const targets = await listLinkTargets(db);
+
+    expect(sql).toContain('AND a.alias NOT IN (SELECT title FROM page WHERE deleted_at IS NULL)');
+    expect(sql).not.toContain('a.alias NOT IN (SELECT title FROM targets)');
+    expect(targets).toEqual([{ id: 'renamed', title: 'New Title', updatedAt: 500, aliases: [] }]);
   });
 });
 

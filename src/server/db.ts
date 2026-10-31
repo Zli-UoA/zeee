@@ -228,7 +228,7 @@ export async function listLinkTargets(db: D1Database): Promise<LinkTarget[]> {
        FROM targets t
        LEFT JOIN page_alias a
          ON a.page_id = t.id
-        AND a.alias NOT IN (SELECT title FROM targets)
+        AND a.alias NOT IN (SELECT title FROM page WHERE deleted_at IS NULL)
        ORDER BY t.updated_at DESC, t.id ASC, a.created_at DESC, a.alias ASC`,
     )
     .all<LinkTargetRow>();
