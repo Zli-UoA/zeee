@@ -3,19 +3,27 @@ import { describe, expect, it } from 'vite-plus/test';
 import {
   excerptFromMarkdown,
   getPage,
+  listDeletedPages,
   listPages,
+  permanentlyDeletePage,
   searchPages,
   sortPageSummaries,
+  undeletePage,
 } from '../src/server/db';
 import { sameOrigin } from '../src/server/http';
 import type { PageSummary } from '../src/server/types';
 
 type QueryResult = { results?: unknown[]; first?: unknown };
+type Statement = { sql: string; args: unknown[] };
 
 function database(handler: (sql: string, args: unknown[]) => QueryResult): D1Database {
   function prepare(sql: string) {
     let args: unknown[] = [];
     const statement = {
+      sql,
+      get args() {
+        return args;
+      },
       bind(...values: unknown[]) {
         args = values;
         return statement;
@@ -41,6 +49,16 @@ function database(handler: (sql: string, args: unknown[]) => QueryResult): D1Dat
   return {
     async exec() {
       return { count: 0, duration: 0 };
+    },
+    async batch(statements: Statement[]) {
+      return statements.map((statement) => {
+        const result = handler(statement.sql, statement.args);
+        return {
+          results: result.results ?? [],
+          success: true,
+          meta: {},
+        } as unknown as D1Result;
+      });
     },
     prepare,
   } as unknown as D1Database;
@@ -194,6 +212,137 @@ describe('getPage', () => {
       updatedAt: 200,
       markdown: '# 見出し\n\n本文です。',
     });
+  });
+});
+
+describe('listDeletedPages', () => {
+  it('returns soft-deleted pages with deletion metadata and excerpts', async () => {
+    let sql = '';
+    const db = database((statement) => {
+      sql = statement;
+      return {
+        results: [
+          {
+            id: 'trashed',
+            title: '古いメモ',
+            created_at: 100,
+            updated_at: 300,
+            deleted_at: 400,
+            created_by_name: '山田 太郎',
+            excerpt_source: '## 見出し\n\n本文です。',
+          },
+          {
+            id: 'trashed-older',
+            title: 'さらに古いメモ',
+            created_at: 50,
+            updated_at: 150,
+            deleted_at: 200,
+            created_by_name: null,
+            excerpt_source: '',
+          },
+        ],
+      };
+    });
+
+    const pages = await listDeletedPages(db);
+
+    expect(sql).toContain('p.deleted_at IS NOT NULL');
+    expect(sql).toContain('ORDER BY p.deleted_at DESC');
+    expect(sql).toContain('LIMIT 200');
+    expect(pages).toEqual([
+      {
+        id: 'trashed',
+        title: '古いメモ',
+        createdAt: 100,
+        createdByName: '山田 太郎',
+        excerpt: '見出し 本文です。',
+        updatedAt: 300,
+        deletedAt: 400,
+      },
+      {
+        id: 'trashed-older',
+        title: 'さらに古いメモ',
+        createdAt: 50,
+        createdByName: '',
+        excerpt: '',
+        updatedAt: 150,
+        deletedAt: 200,
+      },
+    ]);
+  });
+});
+
+describe('undeletePage', () => {
+  it('clears deleted_at and rebuilds the search index', async () => {
+    const statements: Statement[] = [];
+    const db = database((sql, args) => {
+      statements.push({ sql, args });
+      if (sql.includes('SELECT id FROM page')) return { first: { id: 'page-1' } };
+      return {};
+    });
+
+    await expect(undeletePage(db, 'page-1')).resolves.toBe(true);
+
+    const update = statements.find((statement) => statement.sql.startsWith('UPDATE page'));
+    expect(update?.sql).toBe('UPDATE page SET deleted_at = NULL, updated_at = ? WHERE id = ?');
+    expect(update?.args).toEqual([expect.any(Number), 'page-1']);
+
+    const clearFts = statements.find(
+      (statement) => statement.sql === 'DELETE FROM page_fts WHERE page_id = ?',
+    );
+    expect(clearFts?.args).toEqual(['page-1']);
+
+    const rebuildFts = statements.find((statement) =>
+      statement.sql.startsWith('INSERT INTO page_fts'),
+    );
+    expect(rebuildFts?.sql).toContain('COALESCE(b.markdown');
+    expect(rebuildFts?.args).toEqual(['page-1']);
+  });
+
+  it('does not restore a page that is not in the trash', async () => {
+    let statements = 0;
+    const db = database(() => {
+      statements += 1;
+      return { first: null };
+    });
+
+    await expect(undeletePage(db, 'missing')).resolves.toBe(false);
+    expect(statements).toBe(1);
+  });
+});
+
+describe('permanentlyDeletePage', () => {
+  it('removes the page, body, revisions, and search index', async () => {
+    const statements: Statement[] = [];
+    const db = database((sql, args) => {
+      statements.push({ sql, args });
+      if (sql.includes('SELECT id FROM page')) return { first: { id: 'page-1' } };
+      return {};
+    });
+
+    await expect(permanentlyDeletePage(db, 'page-1')).resolves.toBe(true);
+
+    const deletes = statements.filter((statement) => statement.sql.startsWith('DELETE FROM'));
+    expect(deletes.map((statement) => statement.sql)).toEqual([
+      'DELETE FROM revision WHERE page_id = ?',
+      'DELETE FROM page_fts WHERE page_id = ?',
+      'DELETE FROM page_body WHERE page_id = ?',
+      'DELETE FROM page WHERE id = ? AND deleted_at IS NOT NULL',
+    ]);
+    for (const statement of deletes) {
+      expect(statement.args).toEqual(['page-1']);
+    }
+  });
+
+  it('does not purge a page that is not in the trash', async () => {
+    let statements = 0;
+    const db = database(() => {
+      statements += 1;
+      return { first: null };
+    });
+
+    await expect(permanentlyDeletePage(db, 'missing')).resolves.toBe(false);
+    expect(statements).toBe(1);
   });
 });
 
