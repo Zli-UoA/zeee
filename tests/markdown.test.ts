@@ -5,6 +5,7 @@ import {
   transformHeadings,
   type HeadingNode,
 } from '../src/markdown/headings';
+import { sameToc } from '../src/markdown/toc';
 import {
   containsWikiLink,
   createWikiResolver,
@@ -47,6 +48,19 @@ describe('createHeadingSlugger', () => {
     expect(slug('foo')).toBe('foo');
     expect(slug('foo')).toBe('foo-2');
     expect(slug('foo 2')).toBe('foo-2-2');
+  });
+});
+
+describe('sameToc', () => {
+  it('detects heading level changes even when ids and text stay the same', () => {
+    const current = [{ id: '使い方', depth: 2, text: '使い方' }];
+    const next = [{ id: '使い方', depth: 3, text: '使い方' }];
+    expect(sameToc(current, next)).toBe(false);
+  });
+
+  it('returns true for identical entries', () => {
+    const items = [{ id: '使い方', depth: 2, text: '使い方' }];
+    expect(sameToc(items, [...items])).toBe(true);
   });
 });
 

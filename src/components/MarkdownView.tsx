@@ -18,6 +18,7 @@ import { CheckIcon, CopyIcon } from '@phosphor-icons/react';
 import type { Backlink } from '../server/backlinks';
 import type { PageSummary } from '../server/types';
 import { rehypeHeadings } from '../markdown/headings';
+import { sameToc, type TocItem } from '../markdown/toc';
 import { createWikiResolver, remarkWikiLinks } from '../markdown/wiki';
 
 type Props = {
@@ -26,12 +27,6 @@ type Props = {
   pageId: string;
   pageTitle: string;
   sidePanel?: boolean;
-};
-
-type TocItem = {
-  id: string;
-  depth: number;
-  text: string;
 };
 
 type HastNode = {
@@ -151,14 +146,14 @@ export function MarkdownView({ markdown, pages, pageId, pageTitle, sidePanel = t
 
   const hasToc = toc.length > 0;
   const hasBacklinks = (backlinks?.length ?? 0) > 0;
-  const showSidePanel = sidePanel && (hasToc || hasBacklinks);
+  const showSidePanel = sidePanel;
 
   return (
     <div className="min-h-[60svh] px-5 py-7 sm:px-8 sm:py-9 lg:min-h-[calc(100vh-18rem)]">
       <div
         className={
           showSidePanel
-            ? 'xl:grid xl:grid-cols-[minmax(0,1fr)_13rem] xl:items-start xl:gap-10'
+            ? 'xl:grid xl:grid-cols-[minmax(0,36.5rem)_13rem] xl:items-start xl:justify-center xl:gap-10'
             : undefined
         }
       >
@@ -280,13 +275,6 @@ export function MarkdownView({ markdown, pages, pageId, pageTitle, sidePanel = t
         </div>
       ) : null}
     </div>
-  );
-}
-
-function sameToc(a: TocItem[], b: TocItem[]): boolean {
-  return (
-    a.length === b.length &&
-    a.every((item, index) => item.id === b[index].id && item.text === b[index].text)
   );
 }
 
