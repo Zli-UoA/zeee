@@ -126,7 +126,7 @@ jobs:
               echo ""
               echo "R2 secrets 未設定のため skip しました。"
               echo ""
-              echo "Environment \`production\` の secrets \`R2_ACCESS_KEY_ID\` / \`R2_SECRET_ACCESS_KEY\` を設定したうえで、workflow_dispatch で再実行してください。"
+              echo "Environment \`production\` の secrets \`R2_ACCESS_KEY_ID\` / \`R2_SECRET_ACCESS_KEY\` を https://github.com/Zli-UoA/zeee/settings/environments で設定したうえで、workflow_dispatch で再実行してください。"
             } >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
