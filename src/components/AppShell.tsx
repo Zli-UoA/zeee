@@ -1,8 +1,15 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Button, Input, Sidebar, Text, useSidebar } from '@cloudflare/kumo';
-import { ListIcon, MagnifyingGlassIcon, PlusIcon, SignOutIcon } from '@phosphor-icons/react';
+import {
+  ClockCounterClockwiseIcon,
+  ListIcon,
+  MagnifyingGlassIcon,
+  PlusIcon,
+  SignOutIcon,
+  TrashIcon,
+} from '@phosphor-icons/react';
 import { CommandPalette, type CommandPaletteIntent } from './CommandPalette';
-import { useRecentPages } from '../client/useRecentPages';
+import { RECENT_PAGES_SIDEBAR_LIMIT, useRecentPages } from '../client/useRecentPages';
 import type { PageSummary, SessionUser } from '../server/types';
 
 type Props = {
@@ -19,7 +26,7 @@ export function AppShell({ user, pages, activePageId, activeTitle, query, childr
   const [liveTitle, setLiveTitle] = useState(activeTitle);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [paletteIntent, setPaletteIntent] = useState<CommandPaletteIntent>('search');
-  const { recentPages, recordVisit } = useRecentPages();
+  const { recentPages, recordVisit } = useRecentPages(user?.id);
 
   const recentPagesWithTitles = useMemo(
     () =>
@@ -29,6 +36,8 @@ export function AppShell({ user, pages, activePageId, activeTitle, query, childr
       }),
     [recentPages, livePages],
   );
+
+  const sidebarRecentPages = recentPagesWithTitles.slice(0, RECENT_PAGES_SIDEBAR_LIMIT);
 
   useEffect(() => {
     setLivePages(pages);
@@ -125,6 +134,24 @@ export function AppShell({ user, pages, activePageId, activeTitle, query, childr
             </Button>
           </form>
 
+          {sidebarRecentPages.length > 0 ? (
+            <Sidebar.Group>
+              <Sidebar.GroupLabel>最近見たページ</Sidebar.GroupLabel>
+              <Sidebar.Menu>
+                {sidebarRecentPages.map((page) => (
+                  <Sidebar.MenuButton
+                    href={`/pages/${page.id}`}
+                    size="sm"
+                    icon={ClockCounterClockwiseIcon}
+                    key={page.id}
+                  >
+                    {page.title}
+                  </Sidebar.MenuButton>
+                ))}
+              </Sidebar.Menu>
+            </Sidebar.Group>
+          ) : null}
+
           <Sidebar.Group>
             <Sidebar.GroupLabel>ページ</Sidebar.GroupLabel>
             <Sidebar.Menu>
@@ -156,6 +183,14 @@ export function AppShell({ user, pages, activePageId, activeTitle, query, childr
             </div>
           ) : null}
         </Sidebar.Content>
+
+        <Sidebar.Footer>
+          <Sidebar.Menu className="w-full">
+            <Sidebar.MenuButton href="/trash" icon={TrashIcon}>
+              ゴミ箱
+            </Sidebar.MenuButton>
+          </Sidebar.Menu>
+        </Sidebar.Footer>
       </Sidebar>
 
       <div className="flex min-w-0 flex-1 flex-col">
@@ -267,7 +302,7 @@ function MobileNavButton() {
       aria-controls="pages-nav"
       aria-expanded={openMobile}
       onClick={() => setOpenMobile(true)}
-      className="size-9 md:hidden"
+      className="size-11 md:hidden"
     >
       <ListIcon size={18} />
     </Button>
@@ -285,7 +320,7 @@ function MobilePageActions({ onSearch, onCreate }: { onSearch: () => void; onCre
         aria-haspopup="dialog"
         title="ページを検索"
         onClick={onSearch}
-        className="size-9"
+        className="size-11"
       >
         <MagnifyingGlassIcon size={18} />
       </Button>
@@ -297,7 +332,7 @@ function MobilePageActions({ onSearch, onCreate }: { onSearch: () => void; onCre
         aria-haspopup="dialog"
         title="新しいページを作成"
         onClick={onCreate}
-        className="size-9"
+        className="size-11"
       >
         <PlusIcon size={18} />
       </Button>
