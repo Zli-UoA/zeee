@@ -28,6 +28,10 @@ body {
   background: transparent;
 }
 
+.cm-editor.cm-focused {
+  outline: none;
+}
+
 .cm-scroller {
   font-family: ui-monospace, 'SFMono-Regular', 'Menlo', 'Consolas', monospace;
 }
