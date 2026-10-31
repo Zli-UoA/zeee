@@ -43,6 +43,13 @@ CREATE TABLE IF NOT EXISTS page (
 );
 CREATE INDEX IF NOT EXISTS page_updated_idx ON page(updated_at DESC);
 
+CREATE TABLE IF NOT EXISTS page_alias (
+  alias TEXT PRIMARY KEY,
+  page_id TEXT NOT NULL REFERENCES page(id) ON DELETE CASCADE,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS page_alias_page_idx ON page_alias(page_id);
+
 CREATE TABLE IF NOT EXISTS page_body (
   page_id TEXT PRIMARY KEY REFERENCES page(id) ON DELETE CASCADE,
   markdown TEXT NOT NULL,

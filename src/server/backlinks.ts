@@ -17,6 +17,10 @@ type BacklinkRow = {
   markdown: string | null;
 };
 
+type AliasRow = {
+  alias: string | null;
+};
+
 const CANDIDATE_LIMIT = 50;
 const RESULT_LIMIT = 20;
 const EXCERPT_CONTEXT = 80;
@@ -30,7 +34,25 @@ export async function listBacklinks(db: D1Database, pageId: string): Promise<Bac
   const title = target?.title?.trim();
   if (!title) return [];
 
-  const like = `%[[%${escapeLike(title)}%`;
+  const aliases = await db
+    .prepare(
+      `SELECT alias FROM page_alias
+       WHERE page_id = ?
+         AND alias NOT IN (SELECT title FROM page WHERE deleted_at IS NULL)
+       ORDER BY created_at DESC`,
+    )
+    .bind(pageId)
+    .all<AliasRow>();
+
+  const names: string[] = [];
+  for (const candidate of [title, ...(aliases.results ?? []).map((row) => row.alias)]) {
+    const name = candidate?.trim();
+    if (!name || names.includes(name)) continue;
+    names.push(name);
+  }
+
+  const likes = names.map((name) => `%[[%${escapeLike(name)}%`);
+  const filters = names.map(() => "b.markdown LIKE ? ESCAPE '\\'").join(' OR ');
   const result = await db
     .prepare(
       `SELECT p.id, p.title, p.updated_at, u.display_name AS author_name,
@@ -39,17 +61,21 @@ export async function listBacklinks(db: D1Database, pageId: string): Promise<Bac
        JOIN page_body b ON b.page_id = p.id
        LEFT JOIN app_user u ON u.id = p.created_by
        WHERE p.deleted_at IS NULL AND p.id <> ?
-         AND b.markdown LIKE ? ESCAPE '\\'
+         AND (${filters})
        ORDER BY p.updated_at DESC, p.id ASC
        LIMIT ${CANDIDATE_LIMIT}`,
     )
-    .bind(pageId, like)
+    .bind(pageId, ...likes)
     .all<BacklinkRow>();
 
   const backlinks: Backlink[] = [];
   for (const row of result.results ?? []) {
     const markdown = row.markdown ?? '';
-    const reference = findWikiReference(markdown, title);
+    let reference: { index: number; length: number } | null = null;
+    for (const name of names) {
+      reference = findWikiReference(markdown, name);
+      if (reference) break;
+    }
     if (!reference) continue;
     backlinks.push({
       id: row.id,

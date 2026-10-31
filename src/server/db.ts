@@ -3,6 +3,7 @@ import { ensureSchema } from './schema';
 import {
   PAGE_LIST_LIMIT,
   type DeletedPageSummary,
+  type LinkTarget,
   type PageRecord,
   type PageSort,
   type PageSummary,
@@ -13,6 +14,9 @@ import {
 
 const EXCERPT_LENGTH = 180;
 const EXCERPT_SOURCE_LENGTH = 1000;
+
+const UPSERT_PAGE_ALIAS = `INSERT INTO page_alias (alias, page_id, created_at) VALUES (?, ?, ?)
+  ON CONFLICT(alias) DO UPDATE SET page_id = excluded.page_id, created_at = excluded.created_at`;
 
 type UserRow = {
   id: string;
@@ -48,6 +52,13 @@ type SearchRow = {
   title: string;
   excerpt: string | null;
   updated_at: number;
+};
+
+type LinkTargetRow = {
+  id: string;
+  title: string;
+  updated_at: number;
+  alias: string | null;
 };
 
 type RevisionRow = {
@@ -203,6 +214,37 @@ export async function listPages(db: D1Database): Promise<PageSummary[]> {
   return (result.results ?? []).map(toPageSummary);
 }
 
+export async function listLinkTargets(db: D1Database): Promise<LinkTarget[]> {
+  await ensureSchema(db);
+  const result = await db
+    .prepare(
+      `WITH targets AS (
+         SELECT id, title, updated_at FROM page
+         WHERE deleted_at IS NULL
+         ORDER BY updated_at DESC
+         LIMIT ${PAGE_LIST_LIMIT}
+       )
+       SELECT t.id, t.title, t.updated_at, a.alias
+       FROM targets t
+       LEFT JOIN page_alias a
+         ON a.page_id = t.id
+        AND a.alias NOT IN (SELECT title FROM targets)
+       ORDER BY t.updated_at DESC, t.id ASC, a.created_at DESC, a.alias ASC`,
+    )
+    .all<LinkTargetRow>();
+
+  const targets = new Map<string, LinkTarget>();
+  for (const row of result.results ?? []) {
+    let target = targets.get(row.id);
+    if (!target) {
+      target = { id: row.id, title: row.title, updatedAt: row.updated_at, aliases: [] };
+      targets.set(row.id, target);
+    }
+    if (row.alias) target.aliases.push(row.alias);
+  }
+  return [...targets.values()];
+}
+
 export async function listDeletedPages(db: D1Database): Promise<DeletedPageSummary[]> {
   await ensureSchema(db);
   const result = await db
@@ -351,14 +393,27 @@ export async function createPage(
   };
 }
 
+export async function addPageAlias(db: D1Database, pageId: string, title: string): Promise<void> {
+  await ensureSchema(db);
+  const alias = title.trim();
+  if (!alias) return;
+  await db.prepare(UPSERT_PAGE_ALIAS).bind(alias, pageId, Date.now()).run();
+}
+
 export async function updatePageTitle(
   db: D1Database,
   pageId: string,
   title: string,
+  previousTitle?: string,
 ): Promise<void> {
   await ensureSchema(db);
   const timestamp = Date.now();
-  await db.batch([
+  const previous = previousTitle?.trim() ?? '';
+  const statements: D1PreparedStatement[] = [];
+  if (previous && previous !== title) {
+    statements.push(db.prepare(UPSERT_PAGE_ALIAS).bind(previous, pageId, timestamp));
+  }
+  statements.push(
     db
       .prepare('UPDATE page SET title = ?, updated_at = ? WHERE id = ?')
       .bind(title, timestamp, pageId),
@@ -370,7 +425,8 @@ export async function updatePageTitle(
          LEFT JOIN page_body b ON b.page_id = p.id WHERE p.id = ?`,
       )
       .bind(pageId),
-  ]);
+  );
+  await db.batch(statements);
 }
 
 export async function softDeletePage(db: D1Database, pageId: string): Promise<void> {
