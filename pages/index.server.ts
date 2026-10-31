@@ -59,7 +59,7 @@ export const loader = defineHandler(async (c): Promise<Props> => {
     user,
     pages,
     sidebarPages,
-    recentPages: readRecentPages(c, sidebarPages),
+    recentPages: readRecentPages(c, sidebarPages, user.id),
     query,
     sort,
     results: query ? await searchPages(env.DB, query) : [],

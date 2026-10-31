@@ -55,7 +55,7 @@ export const loader = defineHandler(async (c): Promise<Props> => {
       page: null,
       revisions: [],
       pages,
-      recentPages: readRecentPages(c, pages),
+      recentPages: readRecentPages(c, pages, user.id),
       linkTargets,
       loginUrl,
     };
@@ -66,7 +66,7 @@ export const loader = defineHandler(async (c): Promise<Props> => {
     page,
     revisions: await listRevisions(env.DB, id),
     pages,
-    recentPages: readRecentPages(c, pages, page.id),
+    recentPages: readRecentPages(c, pages, user.id, page.id),
     linkTargets,
     loginUrl,
   };

@@ -4,9 +4,13 @@ export type RecentPage = {
   visitedAt: number;
 };
 
-export const RECENT_PAGES_COOKIE = 'zeee_recent_pages';
+export const RECENT_PAGES_COOKIE_PREFIX = 'zeee_recent_pages';
 export const RECENT_PAGES_LIMIT = 8;
 export const RECENT_PAGES_SIDEBAR_LIMIT = 5;
+
+export function recentPagesCookieName(userId: string): string {
+  return `${RECENT_PAGES_COOKIE_PREFIX}_${userId}`;
+}
 
 export function encodeRecentPageIds(pages: RecentPage[]): string {
   const ids = new Set<string>();

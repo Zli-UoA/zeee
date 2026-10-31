@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Badge, LayerDialog, Text } from '@cloudflare/kumo';
 import type { RevisionRecord } from '../server/types';
 import { formatDate } from '../shared/format';
@@ -34,7 +34,10 @@ export function RevisionPreview({
   }, [revision]);
 
   const shown = revision ?? shownRevision;
-  const diff = shown ? buildDiff(currentMarkdown, shown.markdown) : null;
+  const diff = useMemo(
+    () => (revision ? buildDiff(currentMarkdown, revision.markdown) : null),
+    [revision, currentMarkdown],
+  );
   const added = diff?.filter((line) => line.kind === 'add').length ?? 0;
   const removed = diff?.filter((line) => line.kind === 'remove').length ?? 0;
   const changed = added > 0 || removed > 0;

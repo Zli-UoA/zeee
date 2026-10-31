@@ -130,6 +130,7 @@ export default function Home({
           >
             {sort !== 'updated' ? <input type="hidden" name="sort" value={sort} /> : null}
             <Input
+              key={query}
               name="q"
               type="search"
               defaultValue={query}

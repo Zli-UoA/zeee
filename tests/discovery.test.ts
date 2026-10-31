@@ -12,7 +12,12 @@ import {
   withRecentPage,
   type RecentPage,
 } from '../src/client/useRecentPages';
-import { encodeRecentPageIds, parseRecentPageIds, recentPagesFromIds } from '../src/shared/recent';
+import {
+  encodeRecentPageIds,
+  parseRecentPageIds,
+  recentPagesCookieName,
+  recentPagesFromIds,
+} from '../src/shared/recent';
 import type { PageSummary } from '../src/server/types';
 
 describe('splitHighlight', () => {
@@ -208,6 +213,11 @@ describe('recent page cookie', () => {
 
     expect(encodeRecentPageIds(pages)).toBe('page-2,page-1');
     expect(parseRecentPageIds('page-2,page-1,page-2')).toEqual(['page-2', 'page-1']);
+  });
+
+  it('names the recent cookie per user', () => {
+    expect(recentPagesCookieName('user-a')).not.toBe(recentPagesCookieName('user-b'));
+    expect(recentPagesCookieName('user-a')).toContain('user-a');
   });
 
   it('drops recent pages that no longer exist', () => {

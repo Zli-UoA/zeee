@@ -67,6 +67,10 @@ export function AppShell({
   }, [pages, activeTitle]);
 
   useEffect(() => {
+    if (liveTitle) document.title = `${liveTitle} | Zeee`;
+  }, [liveTitle]);
+
+  useEffect(() => {
     if (!user || !activePageId || !liveTitle) return;
     recordVisit({ id: activePageId, title: liveTitle });
   }, [user, activePageId, liveTitle, recordVisit]);
@@ -122,6 +126,11 @@ export function AppShell({
   return (
     <LinkProvider component={AppLink}>
       <Sidebar.Provider collapsible="offcanvas" className="min-h-svh bg-kumo-canvas">
+        <CloseMobileSidebarOnNavigate
+          activePageId={activePageId}
+          activeNav={activeNav}
+          query={query}
+        />
         <SkipToContent />
         <Sidebar id="pages-nav" className="md:sticky md:top-0 md:h-svh">
           <Sidebar.Header className="h-14 justify-between px-3.5">
@@ -288,6 +297,24 @@ export function AppShell({
       </Sidebar.Provider>
     </LinkProvider>
   );
+}
+
+function CloseMobileSidebarOnNavigate({
+  activePageId,
+  activeNav,
+  query,
+}: {
+  activePageId?: string;
+  activeNav?: NavSection;
+  query?: string;
+}) {
+  const { setOpenMobile } = useSidebar();
+
+  useEffect(() => {
+    setOpenMobile(false);
+  }, [activePageId, activeNav, query, setOpenMobile]);
+
+  return null;
 }
 
 function SkipToContent() {

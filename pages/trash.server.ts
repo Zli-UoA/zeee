@@ -32,7 +32,7 @@ export const loader = defineHandler(async (c): Promise<Props> => {
   return {
     user,
     pages,
-    recentPages: readRecentPages(c, pages),
+    recentPages: readRecentPages(c, pages, user.id),
     deletedPages,
     loginUrl: loginPath(c, '/trash'),
   };

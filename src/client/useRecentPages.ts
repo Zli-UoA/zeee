@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   encodeRecentPageIds,
-  RECENT_PAGES_COOKIE,
+  recentPagesCookieName,
   RECENT_PAGES_LIMIT,
   RECENT_PAGES_SIDEBAR_LIMIT,
   type RecentPage,
@@ -89,10 +89,10 @@ function mergeRecentPages(primary: RecentPage[], secondary: RecentPage[]): Recen
   return merged;
 }
 
-function saveRecentCookie(pages: RecentPage[]) {
+function saveRecentCookie(userId: string, pages: RecentPage[]) {
   if (typeof document === 'undefined') return;
   const secure = window.location.protocol === 'https:' ? '; Secure' : '';
-  document.cookie = `${RECENT_PAGES_COOKIE}=${encodeURIComponent(
+  document.cookie = `${recentPagesCookieName(userId)}=${encodeURIComponent(
     encodeRecentPageIds(pages),
   )}; Path=/; Max-Age=31536000; SameSite=Lax${secure}`;
 }
@@ -103,30 +103,33 @@ type RecentPagesState = {
 };
 
 export function useRecentPages(userId: string | undefined, initialPages: RecentPage[] = []) {
-  const [state, setState] = useState<RecentPagesState | null>(
-    userId ? { userId, pages: initialPages } : null,
-  );
+  const initialState = userId ? { userId, pages: initialPages } : null;
+  const [state, setState] = useState<RecentPagesState | null>(initialState);
+  const stateRef = useRef<RecentPagesState | null>(initialState);
 
   useEffect(() => {
     clearLegacyRecentPages(window.localStorage);
   }, []);
 
   useEffect(() => {
-    setState(userId ? { userId, pages: initialPages } : null);
+    const next = userId ? { userId, pages: initialPages } : null;
+    stateRef.current = next;
+    setState(next);
   }, [userId, initialPages]);
 
   const recordVisit = useCallback(
     (page: { id: string; title: string }) => {
       if (!userId) return;
-      setState((current) => {
-        const currentPages = current?.userId === userId ? current.pages : [];
-        const stored = loadRecentPages(window.localStorage, userId);
-        const next = withRecentPage(currentPages, page);
-        const persisted = withRecentPage(mergeRecentPages(currentPages, stored), page);
-        saveRecentPages(window.localStorage, userId, persisted);
-        saveRecentCookie(persisted);
-        return { userId, pages: next };
-      });
+      const current = stateRef.current;
+      const currentPages = current?.userId === userId ? current.pages : [];
+      const stored = loadRecentPages(window.localStorage, userId);
+      const next = withRecentPage(currentPages, page);
+      const persisted = withRecentPage(mergeRecentPages(currentPages, stored), page);
+      const nextState = { userId, pages: next };
+      stateRef.current = nextState;
+      setState(nextState);
+      saveRecentPages(window.localStorage, userId, persisted);
+      saveRecentCookie(userId, persisted);
     },
     [userId],
   );

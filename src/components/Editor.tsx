@@ -660,7 +660,7 @@ export function Editor({ page, user, revisions, pages, linkTargets }: Props) {
 
       <RevisionPreview
         revision={previewRevision}
-        currentMarkdown={collaboration?.text.toJSON() ?? markdown}
+        currentMarkdown={previewRevision ? (collaboration?.text.toJSON() ?? markdown) : ''}
         busy={restoreBusy}
         error={restoreError}
         onOpenChange={(open) => {
