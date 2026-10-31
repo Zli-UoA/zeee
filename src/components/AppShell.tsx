@@ -1,6 +1,8 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Button, Input, Sidebar, Text, useSidebar } from '@cloudflare/kumo';
-import { ListIcon, PlusIcon, SignOutIcon } from '@phosphor-icons/react';
+import { ListIcon, MagnifyingGlassIcon, PlusIcon, SignOutIcon } from '@phosphor-icons/react';
+import { CommandPalette, type CommandPaletteIntent } from './CommandPalette';
+import { useRecentPages } from '../client/useRecentPages';
 import type { PageSummary, SessionUser } from '../server/types';
 
 type Props = {
@@ -15,11 +17,47 @@ type Props = {
 export function AppShell({ user, pages, activePageId, activeTitle, query, children }: Props) {
   const [livePages, setLivePages] = useState(pages);
   const [liveTitle, setLiveTitle] = useState(activeTitle);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [paletteIntent, setPaletteIntent] = useState<CommandPaletteIntent>('search');
+  const { recentPages, recordVisit } = useRecentPages();
+
+  const recentPagesWithTitles = useMemo(
+    () =>
+      recentPages.map((page) => {
+        const current = livePages.find((candidate) => candidate.id === page.id);
+        return current ? { ...page, title: current.title } : page;
+      }),
+    [recentPages, livePages],
+  );
 
   useEffect(() => {
     setLivePages(pages);
     setLiveTitle(activeTitle);
   }, [pages, activeTitle]);
+
+  useEffect(() => {
+    if (!user || !activePageId || !liveTitle) return;
+    recordVisit({ id: activePageId, title: liveTitle });
+  }, [user, activePageId, liveTitle, recordVisit]);
+
+  useEffect(() => {
+    if (!user) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.isComposing || event.key === 'Process') return;
+      if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey) return;
+      if (event.key.toLowerCase() !== 'k') return;
+      event.preventDefault();
+      setPaletteIntent('search');
+      setPaletteOpen(true);
+    };
+    window.addEventListener('keydown', handleKeyDown, true);
+    return () => window.removeEventListener('keydown', handleKeyDown, true);
+  }, [user]);
+
+  function openPalette(intent: CommandPaletteIntent) {
+    setPaletteIntent(intent);
+    setPaletteOpen(true);
+  }
 
   useEffect(() => {
     const handleRename = (event: Event) => {
@@ -148,6 +186,11 @@ export function AppShell({ user, pages, activePageId, activeTitle, query, childr
             ) : null}
 
             <div className="ml-auto flex shrink-0 items-center gap-2">
+              <MobilePageActions
+                onSearch={() => openPalette('search')}
+                onCreate={() => openPalette('create')}
+              />
+
               <form method="get" action="/" role="search" className="hidden lg:block">
                 <Input
                   name="q"
@@ -190,6 +233,13 @@ export function AppShell({ user, pages, activePageId, activeTitle, query, childr
           {children}
         </main>
       </div>
+
+      <CommandPalette
+        open={paletteOpen}
+        intent={paletteIntent}
+        onOpenChange={setPaletteOpen}
+        recentPages={recentPagesWithTitles}
+      />
     </Sidebar.Provider>
   );
 }
@@ -221,6 +271,37 @@ function MobileNavButton() {
     >
       <ListIcon size={18} />
     </Button>
+  );
+}
+
+function MobilePageActions({ onSearch, onCreate }: { onSearch: () => void; onCreate: () => void }) {
+  return (
+    <div className="flex items-center gap-1 lg:hidden">
+      <Button
+        type="button"
+        variant="ghost"
+        shape="square"
+        aria-label="ページを検索"
+        aria-haspopup="dialog"
+        title="ページを検索"
+        onClick={onSearch}
+        className="size-9"
+      >
+        <MagnifyingGlassIcon size={18} />
+      </Button>
+      <Button
+        type="button"
+        variant="ghost"
+        shape="square"
+        aria-label="新しいページを作成"
+        aria-haspopup="dialog"
+        title="新しいページを作成"
+        onClick={onCreate}
+        className="size-9"
+      >
+        <PlusIcon size={18} />
+      </Button>
+    </div>
   );
 }
 
