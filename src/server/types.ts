@@ -16,6 +16,13 @@ export type SessionUser = {
   displayName: string;
 };
 
+export type LinkTarget = {
+  id: string;
+  title: string;
+  updatedAt: number;
+  aliases: string[];
+};
+
 export type PageSummary = {
   id: string;
   title: string;
