@@ -99,6 +99,61 @@ describe('listBacklinks', () => {
     expect(await listBacklinks(db, 'missing')).toEqual([]);
   });
 
+  it('matches backlinks through aliases as well as the current title', async () => {
+    const db = database((sql) => {
+      if (sql.includes('FROM page_alias')) return { results: [{ alias: 'Old Title' }] };
+      if (sql.includes('SELECT title FROM page')) return { first: { title: 'New Title' } };
+      return {
+        results: [
+          row('a', 'A', '前 [[New Title]] 後', 300),
+          row('b', 'B', '前 [[Old Title|旧名]] 後', 200),
+          row('c', 'C', '前 [[Unrelated]] 後', 100),
+        ],
+      };
+    }) as D1Database & { calls: { sql: string; args: unknown[] }[] };
+
+    const backlinks = await listBacklinks(db, 'current');
+
+    expect(backlinks.map((backlink) => backlink.id)).toEqual(['a', 'b']);
+    expect(backlinks[1].excerpt).toContain('旧名');
+
+    const candidate = db.calls.find(
+      (call) => call.sql.includes('FROM page p') && call.sql.includes('markdown LIKE'),
+    );
+    expect(candidate?.sql).toContain("b.markdown LIKE ? ESCAPE '\\'");
+    expect(candidate?.args).toEqual(['current', '%[[%New Title%', '%[[%Old Title%']);
+  });
+
+  it('ignores aliases that collide with a current title', async () => {
+    const db = database((sql) => {
+      if (sql.includes('FROM page_alias')) return { results: [{ alias: 'Taken Title' }] };
+      if (sql.includes('SELECT title FROM page')) return { first: { title: 'Current Title' } };
+      return { results: [] };
+    }) as D1Database & { calls: { sql: string; args: unknown[] }[] };
+
+    await listBacklinks(db, 'current');
+
+    const alias = db.calls.find((call) => call.sql.includes('FROM page_alias'));
+    expect(alias?.sql).toContain('NOT IN (SELECT title FROM page WHERE deleted_at IS NULL)');
+    expect(alias?.sql).toContain('WHERE page_id = ?');
+    expect(alias?.args).toEqual(['current']);
+  });
+
+  it('does not repeat the current title when it is also stored as an alias', async () => {
+    const db = database((sql) => {
+      if (sql.includes('FROM page_alias')) return { results: [{ alias: 'Same Title' }] };
+      if (sql.includes('SELECT title FROM page')) return { first: { title: 'Same Title' } };
+      return { results: [] };
+    }) as D1Database & { calls: { sql: string; args: unknown[] }[] };
+
+    await listBacklinks(db, 'current');
+
+    const candidate = db.calls.find(
+      (call) => call.sql.includes('FROM page p') && call.sql.includes('markdown LIKE'),
+    );
+    expect(candidate?.args).toEqual(['current', '%[[%Same Title%']);
+  });
+
   it('caps the result at 20 pages', async () => {
     const db = database((sql) => {
       if (sql.includes('SELECT title FROM page')) return { first: { title: 'Zeee' } };
