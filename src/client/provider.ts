@@ -78,6 +78,7 @@ export class ZeeeProvider {
     this.socket = socket;
 
     socket.addEventListener('open', () => {
+      if (this.socket !== socket) return;
       this.reconnectDelay = 500;
       this.connection = 'connected';
       this.onStatus('connected');
@@ -97,6 +98,7 @@ export class ZeeeProvider {
     });
 
     socket.addEventListener('message', (event) => {
+      if (this.socket !== socket) return;
       if (typeof event.data !== 'string' || event.data === 'pong') return;
       let message: ServerMessage;
       try {
@@ -129,6 +131,7 @@ export class ZeeeProvider {
     });
 
     socket.addEventListener('close', () => {
+      if (this.socket !== socket) return;
       if (this.pingTimer) clearInterval(this.pingTimer);
       this.pingTimer = null;
       this.socket = null;
@@ -143,7 +146,9 @@ export class ZeeeProvider {
       this.reconnectDelay = Math.min(this.reconnectDelay * 2, 10_000);
     });
 
-    socket.addEventListener('error', () => socket.close());
+    socket.addEventListener('error', () => {
+      if (this.socket === socket) socket.close();
+    });
   }
 
   retry(): void {

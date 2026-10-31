@@ -685,18 +685,42 @@ function SaveStatusBadge({
   onRetry: () => void;
 }) {
   const display = saveStatusDisplay(connection, save);
+  const [announcement, setAnnouncement] = useState('');
+
+  useEffect(() => {
+    let message = '';
+    let delay = 0;
+    if (save.state === 'failed') {
+      message = '保存に失敗しました。再試行できます。';
+    } else if (save.state === 'unsent') {
+      message =
+        connection === 'reconnecting'
+          ? '未保存の変更があります。再接続中です。'
+          : '未保存の変更があります。接続が切れています。';
+    } else if (connection === 'connecting') {
+      message = 'サーバーに接続しています。';
+    } else if (connection === 'reconnecting') {
+      message = 'サーバーに再接続中です。';
+    } else if (save.state === 'saving') {
+      message = '保存中です。';
+      delay = 1000;
+    } else {
+      message = '保存済みです。';
+      delay = 600;
+    }
+    const timer = setTimeout(() => setAnnouncement(message), delay);
+    return () => clearTimeout(timer);
+  }, [connection, save.state]);
+
   return (
     <div className="flex items-center gap-1">
-      <span
-        title={display.title}
-        aria-live="polite"
-        aria-atomic="true"
-        role="status"
-        className="inline-flex"
-      >
+      <span title={display.title} className="inline-flex">
         <Badge appearance="dot" variant={display.variant}>
           {display.label}
         </Badge>
+      </span>
+      <span className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+        {announcement}
       </span>
       {save.state === 'failed' ? (
         <Button
