@@ -139,6 +139,10 @@ body {
   margin-top: 0.3em;
 }
 
+.zeee-prose .task-list-item {
+  list-style: none;
+}
+
 .zeee-prose li > ul,
 .zeee-prose li > ol {
   margin: 0.3em 0;

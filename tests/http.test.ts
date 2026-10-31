@@ -1,22 +1,65 @@
+import type { CloudContext } from 'void';
 import { describe, expect, it } from 'vite-plus/test';
-import { isAllowedOrigin } from '../src/server/http';
+import { sameOrigin } from '../src/server/http';
 
-describe('isAllowedOrigin', () => {
+function context(
+  url: string,
+  origin: string | undefined,
+  env: Record<string, string | undefined> = {},
+): CloudContext {
+  return {
+    env,
+    req: {
+      url,
+      header: (name: string) => (name === 'origin' ? origin : undefined),
+    },
+  } as unknown as CloudContext;
+}
+
+describe('sameOrigin', () => {
   it('allows requests without an origin', () => {
-    expect(isAllowedOrigin(undefined, 'http://127.0.0.1:9876')).toBe(true);
+    expect(sameOrigin(context('http://127.0.0.1:9876/', undefined))).toBe(true);
   });
 
-  it('allows the origin of the request itself', () => {
-    expect(isAllowedOrigin('http://192.168.0.170:9876', 'http://192.168.0.170:9876')).toBe(true);
-  });
-
-  it('allows the configured public origin behind a proxy', () => {
+  it('allows the actual request origin when dev mode points elsewhere', () => {
     expect(
-      isAllowedOrigin('https://zeee.zli.works', 'http://celld:8080', 'https://zeee.zli.works'),
+      sameOrigin(
+        context('http://192.168.0.170:9876/pages/1', 'http://192.168.0.170:9876', {
+          ZEEE_DEV_AUTH: '1',
+          PUBLIC_ORIGIN: 'http://127.0.0.1:9876',
+        }),
+      ),
     ).toBe(true);
   });
 
-  it('rejects any other origin', () => {
-    expect(isAllowedOrigin('http://localhost:9876', 'http://192.168.0.170:9876')).toBe(false);
+  it('rejects a different origin in dev mode', () => {
+    expect(
+      sameOrigin(
+        context('http://192.168.0.170:9876/pages/1', 'http://127.0.0.1:9876', {
+          ZEEE_DEV_AUTH: '1',
+          PUBLIC_ORIGIN: 'http://127.0.0.1:9876',
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  it('allows the public origin behind a proxy in production', () => {
+    expect(
+      sameOrigin(
+        context('http://celld:8080/pages/1', 'https://zeee.zli.works', {
+          PUBLIC_ORIGIN: 'https://zeee.zli.works',
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  it('does not trust the request origin in production', () => {
+    expect(
+      sameOrigin(
+        context('http://192.168.0.170:9876/pages/1', 'http://192.168.0.170:9876', {
+          PUBLIC_ORIGIN: 'https://zeee.zli.works',
+        }),
+      ),
+    ).toBe(false);
   });
 });

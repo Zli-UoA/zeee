@@ -2,8 +2,10 @@ import { useEffect, useRef, useState } from 'react';
 import * as Y from 'yjs';
 import { Awareness } from 'y-protocols/awareness';
 import { EditorView, basicSetup } from 'codemirror';
+import { Prec } from '@codemirror/state';
+import { keymap } from '@codemirror/view';
 import { markdown as markdownLanguage } from '@codemirror/lang-markdown';
-import { yCollab } from 'y-codemirror.next';
+import { yCollab, yUndoManagerKeymap } from 'y-codemirror.next';
 import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeSanitize from 'rehype-sanitize';
@@ -31,6 +33,7 @@ type Props = {
 type Collaboration = {
   text: Y.Text;
   awareness: Awareness;
+  undoManager: Y.UndoManager;
 };
 
 type Mode = 'read' | 'edit';
@@ -104,6 +107,7 @@ export function Editor({ page, user, revisions }: Props) {
     const doc = new Y.Doc();
     const text = doc.getText('markdown');
     const awareness = new Awareness(doc);
+    const undoManager = new Y.UndoManager(text);
     awareness.setLocalStateField('user', {
       name: user.displayName,
       color: colorFor(user.displayName),
@@ -130,7 +134,7 @@ export function Editor({ page, user, revisions }: Props) {
         text.observe(observer);
 
         provider = new ZeeeProvider(page.id, doc, awareness, seed, setStatus, setUsers);
-        setCollaboration({ text, awareness });
+        setCollaboration({ text, awareness, undoManager });
       } catch (loadError) {
         setError(loadError instanceof Error ? loadError.message : '本文を読み込めませんでした');
         doc.destroy();
@@ -145,6 +149,7 @@ export function Editor({ page, user, revisions }: Props) {
       }
       if (observer) text.unobserve(observer);
       provider?.destroy();
+      undoManager.destroy();
       awareness.destroy();
       doc.destroy();
       setCollaboration(null);
@@ -157,11 +162,14 @@ export function Editor({ page, user, revisions }: Props) {
       doc: collaboration.text.toJSON(),
       extensions: [
         basicSetup,
+        Prec.high(keymap.of(yUndoManagerKeymap)),
         markdownLanguage(),
         EditorView.lineWrapping,
         EditorView.contentAttributes.of({ 'aria-label': '本文' }),
         editorTheme,
-        yCollab(collaboration.text, collaboration.awareness),
+        yCollab(collaboration.text, collaboration.awareness, {
+          undoManager: collaboration.undoManager,
+        }),
       ],
       parent: editorRef.current,
     });
@@ -251,7 +259,11 @@ export function Editor({ page, user, revisions }: Props) {
 
   return (
     <div className="flex w-full flex-col gap-4">
-      <div className="flex flex-col gap-3">
+      <div
+        className={
+          historyOpen ? 'flex flex-col gap-3 xl:pe-[calc(280px+1rem)]' : 'flex flex-col gap-3'
+        }
+      >
         <div className="zeee-column flex flex-col gap-2 px-5 sm:flex-row sm:items-center sm:gap-3 sm:px-0">
           <div className="min-w-0 sm:flex-1">
             {mode === 'edit' ? (
@@ -300,7 +312,10 @@ export function Editor({ page, user, revisions }: Props) {
                 variant={mode === 'read' ? 'primary' : 'secondary'}
                 icon={mode === 'read' ? <PencilSimpleIcon size={15} /> : <EyeIcon size={15} />}
                 onClick={() => {
-                  if (mode === 'edit') setMarkdown(collaboration?.text.toJSON() ?? markdown);
+                  if (mode === 'edit') {
+                    collaboration?.awareness.setLocalStateField('cursor', null);
+                    setMarkdown(collaboration?.text.toJSON() ?? markdown);
+                  }
                   setMode(mode === 'read' ? 'edit' : 'read');
                 }}
               >
@@ -345,9 +360,11 @@ export function Editor({ page, user, revisions }: Props) {
       </div>
 
       {error ? (
-        <Text variant="error" size="sm">
-          {error}
-        </Text>
+        <div className={historyOpen ? 'xl:pe-[calc(280px+1rem)]' : undefined}>
+          <Text variant="error" size="sm">
+            {error}
+          </Text>
+        </div>
       ) : null}
 
       <div
