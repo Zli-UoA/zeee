@@ -6,9 +6,6 @@ import { Prec } from '@codemirror/state';
 import { keymap } from '@codemirror/view';
 import { markdown as markdownLanguage } from '@codemirror/lang-markdown';
 import { yCollab, yUndoManagerKeymap } from 'y-codemirror.next';
-import ReactMarkdown, { type Components } from 'react-markdown';
-import remarkGfm from 'remark-gfm';
-import rehypeSanitize from 'rehype-sanitize';
 import { Badge, Button, DropdownMenu, Empty, Input, LayerCard, Text } from '@cloudflare/kumo';
 import {
   ArrowClockwiseIcon,
@@ -27,14 +24,16 @@ import {
   type ConnectionStatus,
   type SaveStatus,
 } from '../client/provider';
-import type { PageRecord, RevisionRecord, SessionUser } from '../server/types';
+import type { PageRecord, PageSummary, RevisionRecord, SessionUser } from '../server/types';
 import { formatDate } from '../shared/format';
+import { MarkdownView } from './MarkdownView';
 import { RevisionPreview } from './RevisionPreview';
 
 type Props = {
   page: PageRecord;
   user: SessionUser;
   revisions: RevisionRecord[];
+  pages: PageSummary[];
 };
 
 type Collaboration = {
@@ -44,28 +43,6 @@ type Collaboration = {
 };
 
 type Mode = 'read' | 'edit';
-
-const markdownComponents: Components = {
-  a({ href, children }) {
-    const external = href?.startsWith('http://') || href?.startsWith('https://');
-    return (
-      <a
-        href={href}
-        target={external ? '_blank' : undefined}
-        rel={external ? 'noreferrer noopener' : undefined}
-      >
-        {children}
-      </a>
-    );
-  },
-  table({ children }) {
-    return (
-      <div className="zeee-table">
-        <table>{children}</table>
-      </div>
-    );
-  },
-};
 
 const editorTheme = EditorView.theme({
   '&': {
@@ -92,7 +69,7 @@ const editorTheme = EditorView.theme({
   },
 });
 
-export function Editor({ page, user, revisions }: Props) {
+export function Editor({ page, user, revisions, pages }: Props) {
   const editorRef = useRef<HTMLDivElement>(null);
   const historyRef = useRef<HTMLDivElement>(null);
   const renderTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -492,20 +469,18 @@ export function Editor({ page, user, revisions }: Props) {
             : 'grid grid-cols-1 gap-4'
         }
       >
-        <LayerCard className="overflow-hidden p-0">
+        <LayerCard className={mode === 'read' ? 'p-0' : 'overflow-hidden p-0'}>
           {mode === 'read' ? (
-            <div className="min-h-[60svh] px-5 py-7 sm:px-8 sm:py-9 lg:min-h-[calc(100vh-18rem)]">
-              {markdown.trim() ? (
-                <article className="zeee-prose">
-                  <ReactMarkdown
-                    remarkPlugins={[remarkGfm]}
-                    rehypePlugins={[rehypeSanitize]}
-                    components={markdownComponents}
-                  >
-                    {markdown}
-                  </ReactMarkdown>
-                </article>
-              ) : (
+            markdown.trim() ? (
+              <MarkdownView
+                markdown={markdown}
+                pages={pages}
+                pageId={page.id}
+                pageTitle={savedTitle}
+                sidePanel={!historyOpen}
+              />
+            ) : (
+              <div className="min-h-[60svh] px-5 py-7 sm:px-8 sm:py-9 lg:min-h-[calc(100vh-18rem)]">
                 <Empty
                   icon={<PencilSimpleIcon size={28} />}
                   title="本文はまだありません"
@@ -521,8 +496,8 @@ export function Editor({ page, user, revisions }: Props) {
                     </Button>
                   }
                 />
-              )}
-            </div>
+              </div>
+            )
           ) : (
             <div className="flex min-h-[60svh] flex-col px-5 py-7 sm:px-8 sm:py-9 lg:min-h-[calc(100vh-18rem)]">
               <div

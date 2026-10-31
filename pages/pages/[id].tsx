@@ -19,7 +19,7 @@ export default function PageView({ user, page, revisions, pages, loginUrl }: Pro
           action={{ href: '/', label: 'ページ一覧へ戻る' }}
         />
       ) : (
-        <Editor page={page} user={user} revisions={revisions} />
+        <Editor page={page} user={user} revisions={revisions} pages={pages} />
       )}
     </AppShell>
   );
