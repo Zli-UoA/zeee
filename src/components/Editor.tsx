@@ -125,6 +125,7 @@ export function Editor({ page, user, revisions }: Props) {
           doc.destroy();
           return;
         }
+        undoManager.clear();
 
         setMarkdown(text.toJSON());
         observer = () => {
