@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vite-plus/test';
 import { splitHighlight } from '../src/client/highlight';
+import { buildPaletteActions, normalizeSearchResults } from '../src/client/palette';
 import {
   normalizeRecentPages,
   withRecentPage,
@@ -40,6 +41,63 @@ describe('splitHighlight', () => {
 
   it('returns the original text when the query is blank', () => {
     expect(splitHighlight('本文', '   ')).toEqual([{ text: '本文', match: false }]);
+  });
+});
+
+describe('palette actions', () => {
+  const result = { id: 'page-1', title: 'Page 1', excerpt: 'excerpt' };
+
+  it('puts search results before the create action', () => {
+    const actions = buildPaletteActions({
+      trimmedQuery: 'page',
+      results: [result],
+      resultsQuery: 'page',
+      loading: false,
+      error: null,
+      intent: 'search',
+      recentPages: [],
+    });
+
+    expect(actions.map((action) => action.kind)).toEqual(['result', 'all', 'create']);
+  });
+
+  it('puts the create action first when the search has no results', () => {
+    const actions = buildPaletteActions({
+      trimmedQuery: 'missing',
+      results: [],
+      resultsQuery: 'missing',
+      loading: false,
+      error: null,
+      intent: 'search',
+      recentPages: [],
+    });
+
+    expect(actions.map((action) => action.kind)).toEqual(['create', 'all']);
+  });
+
+  it('does not expose create while a search is pending or failed', () => {
+    const base = {
+      trimmedQuery: 'page',
+      results: [result],
+      resultsQuery: 'page',
+      loading: false,
+      error: null,
+      intent: 'search' as const,
+      recentPages: [],
+    };
+
+    expect(buildPaletteActions({ ...base, loading: true })).toEqual([]);
+    expect(buildPaletteActions({ ...base, resultsQuery: 'old' })).toEqual([]);
+    expect(buildPaletteActions({ ...base, error: 'failed' })).toEqual([]);
+  });
+
+  it('keeps updatedAt when the search API provides it', () => {
+    expect(
+      normalizeSearchResults([{ id: 'page-1', title: 'Page 1', excerpt: '', updatedAt: 123 }]),
+    ).toEqual([{ id: 'page-1', title: 'Page 1', excerpt: '', updatedAt: 123 }]);
+    expect(normalizeSearchResults([{ id: 'page-1', title: 'Page 1' }])).toEqual([
+      { id: 'page-1', title: 'Page 1', excerpt: '' },
+    ]);
   });
 });
 

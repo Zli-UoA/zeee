@@ -18,10 +18,16 @@ import {
   WarningCircleIcon,
 } from '@phosphor-icons/react';
 import { splitHighlight } from '../client/highlight';
+import {
+  buildPaletteActions,
+  normalizeSearchResults,
+  type PaletteAction,
+  type PaletteIntent,
+  type PaletteSearchResult,
+} from '../client/palette';
 import type { RecentPage } from '../client/useRecentPages';
-import type { SearchResult } from '../server/types';
 
-export type CommandPaletteIntent = 'search' | 'create';
+export type CommandPaletteIntent = PaletteIntent;
 
 type Props = {
   open: boolean;
@@ -30,29 +36,10 @@ type Props = {
   recentPages: RecentPage[];
 };
 
-type PaletteAction =
-  | { kind: 'recent'; page: RecentPage }
-  | { kind: 'create'; title: string }
-  | { kind: 'result'; result: SearchResult }
-  | { kind: 'all'; query: string };
-
 type SearchResponse = {
   query?: unknown;
   results?: unknown;
 };
-
-function normalizeResults(value: unknown): SearchResult[] {
-  if (!Array.isArray(value)) return [];
-  const results: SearchResult[] = [];
-  for (const entry of value) {
-    if (!entry || typeof entry !== 'object') continue;
-    const { id, title, excerpt } = entry as Record<string, unknown>;
-    if (typeof id !== 'string' || !id) continue;
-    if (typeof title !== 'string') continue;
-    results.push({ id, title, excerpt: typeof excerpt === 'string' ? excerpt : '' });
-  }
-  return results;
-}
 
 function highlightedParts(text: string, query: string) {
   return splitHighlight(text, query).map((part, index) =>
@@ -76,7 +63,8 @@ export function CommandPalette({ open, intent, onOpenChange, recentPages }: Prop
   const scrollRef = useRef<HTMLDivElement>(null);
   const composingRef = useRef(false);
   const [query, setQuery] = useState('');
-  const [results, setResults] = useState<SearchResult[]>([]);
+  const [results, setResults] = useState<PaletteSearchResult[]>([]);
+  const [resultsQuery, setResultsQuery] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [activeIndex, setActiveIndex] = useState(0);
@@ -90,6 +78,7 @@ export function CommandPalette({ open, intent, onOpenChange, recentPages }: Prop
     if (!open) return;
     setQuery('');
     setResults([]);
+    setResultsQuery(null);
     setLoading(false);
     setError(null);
     setActiveIndex(0);
@@ -107,6 +96,7 @@ export function CommandPalette({ open, intent, onOpenChange, recentPages }: Prop
     if (!open) return;
     if (!trimmedQuery) {
       setResults([]);
+      setResultsQuery(null);
       setLoading(false);
       setError(null);
       return;
@@ -116,6 +106,7 @@ export function CommandPalette({ open, intent, onOpenChange, recentPages }: Prop
     setLoading(true);
     setError(null);
     setResults([]);
+    setResultsQuery(null);
 
     const timer = window.setTimeout(() => {
       void (async () => {
@@ -127,11 +118,13 @@ export function CommandPalette({ open, intent, onOpenChange, recentPages }: Prop
           if (!response.ok) throw new Error(`search failed: ${response.status}`);
           const data = (await response.json()) as SearchResponse;
           if (controller.signal.aborted) return;
-          setResults(normalizeResults(data.results));
+          setResults(normalizeSearchResults(data.results));
+          setResultsQuery(trimmedQuery);
           setLoading(false);
         } catch {
           if (controller.signal.aborted) return;
           setResults([]);
+          setResultsQuery(null);
           setError('検索できませんでした。通信状態を確認してもう一度お試しください。');
           setLoading(false);
         }
@@ -144,17 +137,19 @@ export function CommandPalette({ open, intent, onOpenChange, recentPages }: Prop
     };
   }, [open, trimmedQuery, retryToken]);
 
-  const actions = useMemo<PaletteAction[]>(() => {
-    if (trimmedQuery) {
-      return [
-        { kind: 'create', title: trimmedQuery },
-        ...results.map((result): PaletteAction => ({ kind: 'result', result })),
-        { kind: 'all', query: trimmedQuery },
-      ];
-    }
-    if (intent === 'create') return [{ kind: 'create', title: '' }];
-    return recentPages.map((page): PaletteAction => ({ kind: 'recent', page }));
-  }, [trimmedQuery, results, intent, recentPages]);
+  const actions = useMemo<PaletteAction[]>(
+    () =>
+      buildPaletteActions({
+        trimmedQuery,
+        results,
+        resultsQuery,
+        loading,
+        error,
+        intent,
+        recentPages,
+      }),
+    [trimmedQuery, results, resultsQuery, loading, error, intent, recentPages],
+  );
 
   useEffect(() => {
     setActiveIndex(0);
@@ -227,7 +222,14 @@ export function CommandPalette({ open, intent, onOpenChange, recentPages }: Prop
       return;
     }
     if (event.key === 'Enter') {
-      if (event.metaKey || event.ctrlKey || event.altKey) return;
+      if (event.altKey) return;
+      if (event.metaKey || event.ctrlKey) {
+        const createAction = actions.find((action) => action.kind === 'create');
+        if (!createAction) return;
+        event.preventDefault();
+        runAction(createAction);
+        return;
+      }
       event.preventDefault();
       runAction(actions[activeIndex]);
       return;
@@ -238,12 +240,15 @@ export function CommandPalette({ open, intent, onOpenChange, recentPages }: Prop
     }
   }
 
+  const searchPending = trimmedQuery !== '' && (loading || resultsQuery !== trimmedQuery);
+  const searchSettled = trimmedQuery !== '' && resultsQuery === trimmedQuery && !loading && !error;
+
   const liveMessage = creating
     ? 'ページを作成しています'
-    : loading
-      ? '検索中です'
-      : error
-        ? ''
+    : error
+      ? ''
+      : searchPending
+        ? '検索中です'
         : trimmedQuery
           ? `${results.length}件のページが見つかりました`
           : intent === 'create'
@@ -254,10 +259,132 @@ export function CommandPalette({ open, intent, onOpenChange, recentPages }: Prop
 
   const showEmptyRecent =
     !trimmedQuery && intent === 'search' && recentPages.length === 0 && !creating;
-  const showNoResults = trimmedQuery && !loading && !error && results.length === 0;
-  const createOptionIndex = trimmedQuery || intent === 'create' ? 0 : -1;
-  const resultOffset = createOptionIndex === 0 ? 1 : 0;
+  const showResults = searchSettled && results.length > 0;
+  const showNoResults = searchSettled && results.length === 0;
+  const createIndex = actions.findIndex((action) => action.kind === 'create');
+  const allIndex = actions.findIndex((action) => action.kind === 'all');
   const hasListbox = actions.length > 0;
+
+  const createGroup =
+    createIndex >= 0 ? (
+      <div role="group" aria-label="新規ページ">
+        <div className="px-2 pt-2 pb-1 text-xs font-semibold text-kumo-subtle">作成</div>
+        <PaletteOption
+          id={`${baseId}-option-${createIndex}`}
+          index={createIndex}
+          active={activeIndex === createIndex}
+          disabled={creating}
+          onActivate={() => setActiveIndex(createIndex)}
+          onSelect={() => runAction(actions[createIndex])}
+        >
+          <span className="grid size-8 shrink-0 place-items-center rounded-md bg-kumo-tint text-kumo-strong">
+            <PlusIcon size={16} />
+          </span>
+          <span className="min-w-0 flex-1 truncate text-sm font-medium text-kumo-strong">
+            {creating
+              ? '作成しています…'
+              : trimmedQuery
+                ? `「${trimmedQuery}」を新規ページとして作成`
+                : '無題のページを作成'}
+          </span>
+          {!creating ? (
+            <ArrowRightIcon
+              size={15}
+              className={
+                activeIndex === createIndex
+                  ? 'shrink-0 text-kumo-subtle'
+                  : 'shrink-0 text-kumo-subtle opacity-0'
+              }
+            />
+          ) : (
+            <Loader size="sm" aria-label="作成中" />
+          )}
+        </PaletteOption>
+      </div>
+    ) : null;
+
+  const allGroup =
+    allIndex >= 0 ? (
+      <div role="group" aria-label="すべての検索結果">
+        <PaletteOption
+          id={`${baseId}-option-${allIndex}`}
+          index={allIndex}
+          active={activeIndex === allIndex}
+          onActivate={() => setActiveIndex(allIndex)}
+          onSelect={() => runAction(actions[allIndex])}
+        >
+          <MagnifyingGlassIcon size={17} className="shrink-0 text-kumo-subtle" />
+          <span className="min-w-0 flex-1 truncate text-sm text-kumo-default">
+            すべての結果を見る
+          </span>
+          <span className="hidden shrink-0 text-xs text-kumo-subtle sm:inline">/?q=…</span>
+        </PaletteOption>
+      </div>
+    ) : null;
+
+  const resultsGroup = showResults ? (
+    <div role="group" aria-label="検索結果">
+      <div className="px-2 pt-2 pb-1 text-xs font-semibold text-kumo-subtle">検索結果</div>
+      {results.map((result, index) => (
+        <PaletteOption
+          key={result.id}
+          id={`${baseId}-option-${index}`}
+          index={index}
+          active={activeIndex === index}
+          onActivate={() => setActiveIndex(index)}
+          onSelect={() => runAction(actions[index])}
+        >
+          <FileTextIcon size={17} className="shrink-0 text-kumo-subtle" />
+          <span className="min-w-0 flex-1">
+            <span className="block truncate text-sm font-medium text-kumo-strong">
+              {highlightedParts(result.title, trimmedQuery)}
+            </span>
+            {result.excerpt ? (
+              <span className="line-clamp-2 text-xs text-kumo-subtle">
+                {highlightedParts(result.excerpt, trimmedQuery)}
+              </span>
+            ) : null}
+          </span>
+          <ArrowRightIcon
+            size={15}
+            className={
+              activeIndex === index
+                ? 'shrink-0 text-kumo-subtle'
+                : 'shrink-0 text-kumo-subtle opacity-0'
+            }
+          />
+        </PaletteOption>
+      ))}
+    </div>
+  ) : null;
+
+  const recentGroup =
+    !trimmedQuery && intent === 'search' && recentPages.length > 0 ? (
+      <div role="group" aria-label="最近見たページ">
+        <div className="px-2 pt-2 pb-1 text-xs font-semibold text-kumo-subtle">最近見たページ</div>
+        {recentPages.map((page, index) => (
+          <PaletteOption
+            key={page.id}
+            id={`${baseId}-option-${index}`}
+            index={index}
+            active={activeIndex === index}
+            onActivate={() => setActiveIndex(index)}
+            onSelect={() => runAction(actions[index])}
+          >
+            <ClockCounterClockwiseIcon size={17} className="shrink-0 text-kumo-subtle" />
+            <span className="min-w-0 flex-1 truncate text-sm text-kumo-default">{page.title}</span>
+            <ArrowRightIcon
+              size={15}
+              className={
+                activeIndex === index
+                  ? 'shrink-0 text-kumo-subtle'
+                  : 'shrink-0 text-kumo-subtle opacity-0'
+              }
+            />
+          </PaletteOption>
+        ))}
+      </div>
+    ) : null;
 
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
@@ -313,139 +440,10 @@ export function CommandPalette({ open, intent, onOpenChange, recentPages }: Prop
           <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto p-2">
             {hasListbox ? (
               <div id={listboxId} role="listbox" aria-label="候補">
-                {createOptionIndex === 0 ? (
-                  <div role="group" aria-label="新規ページ">
-                    <div className="px-2 pt-2 pb-1 text-xs font-semibold text-kumo-subtle">
-                      作成
-                    </div>
-                    <PaletteOption
-                      id={`${baseId}-option-0`}
-                      index={0}
-                      active={activeIndex === 0}
-                      disabled={creating}
-                      onActivate={() => setActiveIndex(0)}
-                      onSelect={() => runAction(actions[0])}
-                    >
-                      <span className="grid size-8 shrink-0 place-items-center rounded-md bg-kumo-tint text-kumo-strong">
-                        <PlusIcon size={16} />
-                      </span>
-                      <span className="min-w-0 flex-1 truncate text-sm font-medium text-kumo-strong">
-                        {creating
-                          ? '作成しています…'
-                          : trimmedQuery
-                            ? `「${trimmedQuery}」を新規ページとして作成`
-                            : '無題のページを作成'}
-                      </span>
-                      {!creating ? (
-                        <ArrowRightIcon
-                          size={15}
-                          className={
-                            activeIndex === 0
-                              ? 'shrink-0 text-kumo-subtle'
-                              : 'shrink-0 text-kumo-subtle opacity-0'
-                          }
-                        />
-                      ) : (
-                        <Loader size="sm" aria-label="作成中" />
-                      )}
-                    </PaletteOption>
-                  </div>
-                ) : null}
-
-                {trimmedQuery && results.length > 0 ? (
-                  <div role="group" aria-label="検索結果">
-                    <div className="px-2 pt-2 pb-1 text-xs font-semibold text-kumo-subtle">
-                      検索結果
-                    </div>
-                    {results.map((result, index) => {
-                      const optionIndex = resultOffset + index;
-                      return (
-                        <PaletteOption
-                          key={result.id}
-                          id={`${baseId}-option-${optionIndex}`}
-                          index={optionIndex}
-                          active={activeIndex === optionIndex}
-                          onActivate={() => setActiveIndex(optionIndex)}
-                          onSelect={() => runAction(actions[optionIndex])}
-                        >
-                          <FileTextIcon size={17} className="shrink-0 text-kumo-subtle" />
-                          <span className="min-w-0 flex-1">
-                            <span className="block truncate text-sm font-medium text-kumo-strong">
-                              {highlightedParts(result.title, trimmedQuery)}
-                            </span>
-                            {result.excerpt ? (
-                              <span className="line-clamp-2 text-xs text-kumo-subtle">
-                                {highlightedParts(result.excerpt, trimmedQuery)}
-                              </span>
-                            ) : null}
-                          </span>
-                          <ArrowRightIcon
-                            size={15}
-                            className={
-                              activeIndex === optionIndex
-                                ? 'shrink-0 text-kumo-subtle'
-                                : 'shrink-0 text-kumo-subtle opacity-0'
-                            }
-                          />
-                        </PaletteOption>
-                      );
-                    })}
-                  </div>
-                ) : null}
-
-                {!trimmedQuery && intent === 'search' && recentPages.length > 0 ? (
-                  <div role="group" aria-label="最近見たページ">
-                    <div className="px-2 pt-2 pb-1 text-xs font-semibold text-kumo-subtle">
-                      最近見たページ
-                    </div>
-                    {recentPages.map((page, index) => (
-                      <PaletteOption
-                        key={page.id}
-                        id={`${baseId}-option-${index}`}
-                        index={index}
-                        active={activeIndex === index}
-                        onActivate={() => setActiveIndex(index)}
-                        onSelect={() => runAction(actions[index])}
-                      >
-                        <ClockCounterClockwiseIcon
-                          size={17}
-                          className="shrink-0 text-kumo-subtle"
-                        />
-                        <span className="min-w-0 flex-1 truncate text-sm text-kumo-default">
-                          {page.title}
-                        </span>
-                        <ArrowRightIcon
-                          size={15}
-                          className={
-                            activeIndex === index
-                              ? 'shrink-0 text-kumo-subtle'
-                              : 'shrink-0 text-kumo-subtle opacity-0'
-                          }
-                        />
-                      </PaletteOption>
-                    ))}
-                  </div>
-                ) : null}
-
-                {trimmedQuery ? (
-                  <div role="group" aria-label="すべての検索結果">
-                    <PaletteOption
-                      id={`${baseId}-option-${actions.length - 1}`}
-                      index={actions.length - 1}
-                      active={activeIndex === actions.length - 1}
-                      onActivate={() => setActiveIndex(actions.length - 1)}
-                      onSelect={() => runAction(actions[actions.length - 1])}
-                    >
-                      <MagnifyingGlassIcon size={17} className="shrink-0 text-kumo-subtle" />
-                      <span className="min-w-0 flex-1 truncate text-sm text-kumo-default">
-                        すべての結果を見る
-                      </span>
-                      <span className="hidden shrink-0 text-xs text-kumo-subtle sm:inline">
-                        /?q=…
-                      </span>
-                    </PaletteOption>
-                  </div>
-                ) : null}
+                {showResults ? resultsGroup : null}
+                {showResults ? allGroup : createGroup}
+                {showResults ? createGroup : allGroup}
+                {recentGroup}
               </div>
             ) : null}
 
@@ -500,6 +498,7 @@ export function CommandPalette({ open, intent, onOpenChange, recentPages }: Prop
           <div className="hidden items-center justify-between gap-3 border-t border-kumo-line bg-kumo-elevated px-4 py-2 text-xs text-kumo-subtle sm:flex">
             <span>↑↓ 選択</span>
             <span>Enter 開く</span>
+            <span>⌘/Ctrl+Enter 作成</span>
             <span>Esc 閉じる</span>
           </div>
 

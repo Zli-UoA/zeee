@@ -276,7 +276,7 @@ function MobileNavButton() {
 
 function MobilePageActions({ onSearch, onCreate }: { onSearch: () => void; onCreate: () => void }) {
   return (
-    <div className="flex items-center gap-1 md:hidden">
+    <div className="flex items-center gap-1 lg:hidden">
       <Button
         type="button"
         variant="ghost"
