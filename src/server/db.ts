@@ -386,44 +386,55 @@ export async function softDeletePage(db: D1Database, pageId: string): Promise<vo
 
 export async function undeletePage(db: D1Database, pageId: string): Promise<boolean> {
   await ensureSchema(db);
-  const page = await db
-    .prepare('SELECT id FROM page WHERE id = ? AND deleted_at IS NOT NULL')
-    .bind(pageId)
-    .first<{ id: string }>();
-  if (!page) return false;
-
   const timestamp = Date.now();
-  await db.batch([
+  const results = await db.batch([
     db
-      .prepare('UPDATE page SET deleted_at = NULL, updated_at = ? WHERE id = ?')
+      .prepare(
+        'UPDATE page SET deleted_at = NULL, updated_at = ? WHERE id = ? AND deleted_at IS NOT NULL',
+      )
       .bind(timestamp, pageId),
-    db.prepare('DELETE FROM page_fts WHERE page_id = ?').bind(pageId),
+    db
+      .prepare(
+        `DELETE FROM page_fts WHERE page_id = ?
+         AND EXISTS (SELECT 1 FROM page WHERE id = ? AND deleted_at IS NULL AND updated_at = ?)`,
+      )
+      .bind(pageId, pageId, timestamp),
     db
       .prepare(
         `INSERT INTO page_fts (page_id, title, body)
          SELECT p.id, p.title, COALESCE(b.markdown, '') FROM page p
-         LEFT JOIN page_body b ON b.page_id = p.id WHERE p.id = ?`,
+         LEFT JOIN page_body b ON b.page_id = p.id
+         WHERE p.id = ? AND p.deleted_at IS NULL AND p.updated_at = ?`,
       )
-      .bind(pageId),
+      .bind(pageId, timestamp),
   ]);
-  return true;
+  return (results[0]?.meta.changes ?? 0) > 0;
 }
 
 export async function permanentlyDeletePage(db: D1Database, pageId: string): Promise<boolean> {
   await ensureSchema(db);
-  const page = await db
-    .prepare('SELECT id FROM page WHERE id = ? AND deleted_at IS NOT NULL')
-    .bind(pageId)
-    .first<{ id: string }>();
-  if (!page) return false;
-
-  await db.batch([
-    db.prepare('DELETE FROM revision WHERE page_id = ?').bind(pageId),
-    db.prepare('DELETE FROM page_fts WHERE page_id = ?').bind(pageId),
-    db.prepare('DELETE FROM page_body WHERE page_id = ?').bind(pageId),
+  const results = await db.batch([
+    db
+      .prepare(
+        `DELETE FROM revision WHERE page_id = ?
+         AND EXISTS (SELECT 1 FROM page WHERE id = ? AND deleted_at IS NOT NULL)`,
+      )
+      .bind(pageId, pageId),
+    db
+      .prepare(
+        `DELETE FROM page_fts WHERE page_id = ?
+         AND EXISTS (SELECT 1 FROM page WHERE id = ? AND deleted_at IS NOT NULL)`,
+      )
+      .bind(pageId, pageId),
+    db
+      .prepare(
+        `DELETE FROM page_body WHERE page_id = ?
+         AND EXISTS (SELECT 1 FROM page WHERE id = ? AND deleted_at IS NOT NULL)`,
+      )
+      .bind(pageId, pageId),
     db.prepare('DELETE FROM page WHERE id = ? AND deleted_at IS NOT NULL').bind(pageId),
   ]);
-  return true;
+  return (results[results.length - 1]?.meta.changes ?? 0) > 0;
 }
 
 export async function materializePage(

@@ -13,8 +13,12 @@ import {
 import { sameOrigin } from '../src/server/http';
 import type { PageSummary } from '../src/server/types';
 
-type QueryResult = { results?: unknown[]; first?: unknown };
+type QueryResult = { results?: unknown[]; first?: unknown; changes?: number };
 type Statement = { sql: string; args: unknown[] };
+
+function normalizeSql(sql: string): string {
+  return sql.replace(/\s+/g, ' ').trim();
+}
 
 function database(handler: (sql: string, args: unknown[]) => QueryResult): D1Database {
   function prepare(sql: string) {
@@ -56,7 +60,7 @@ function database(handler: (sql: string, args: unknown[]) => QueryResult): D1Dat
         return {
           results: result.results ?? [],
           success: true,
-          meta: {},
+          meta: { changes: result.changes ?? 0 },
         } as unknown as D1Result;
       });
     },
@@ -273,76 +277,87 @@ describe('listDeletedPages', () => {
 });
 
 describe('undeletePage', () => {
-  it('clears deleted_at and rebuilds the search index', async () => {
+  it('clears deleted_at and rebuilds the search index only for the restored page', async () => {
     const statements: Statement[] = [];
     const db = database((sql, args) => {
       statements.push({ sql, args });
-      if (sql.includes('SELECT id FROM page')) return { first: { id: 'page-1' } };
-      return {};
+      return { changes: sql.startsWith('UPDATE page') ? 1 : 0 };
     });
 
     await expect(undeletePage(db, 'page-1')).resolves.toBe(true);
 
-    const update = statements.find((statement) => statement.sql.startsWith('UPDATE page'));
-    expect(update?.sql).toBe('UPDATE page SET deleted_at = NULL, updated_at = ? WHERE id = ?');
-    expect(update?.args).toEqual([expect.any(Number), 'page-1']);
-
-    const clearFts = statements.find(
-      (statement) => statement.sql === 'DELETE FROM page_fts WHERE page_id = ?',
+    expect(statements).toHaveLength(3);
+    const [update, clearFts, rebuildFts] = statements;
+    expect(normalizeSql(update.sql)).toBe(
+      'UPDATE page SET deleted_at = NULL, updated_at = ? WHERE id = ? AND deleted_at IS NOT NULL',
     );
-    expect(clearFts?.args).toEqual(['page-1']);
+    expect(update.args).toEqual([expect.any(Number), 'page-1']);
 
-    const rebuildFts = statements.find((statement) =>
-      statement.sql.startsWith('INSERT INTO page_fts'),
+    expect(normalizeSql(clearFts.sql)).toBe(
+      'DELETE FROM page_fts WHERE page_id = ? AND EXISTS (SELECT 1 FROM page WHERE id = ? AND deleted_at IS NULL AND updated_at = ?)',
     );
-    expect(rebuildFts?.sql).toContain('COALESCE(b.markdown');
-    expect(rebuildFts?.args).toEqual(['page-1']);
+    expect(clearFts.args).toEqual(['page-1', 'page-1', expect.any(Number)]);
+
+    expect(normalizeSql(rebuildFts.sql)).toBe(
+      "INSERT INTO page_fts (page_id, title, body) SELECT p.id, p.title, COALESCE(b.markdown, '') FROM page p LEFT JOIN page_body b ON b.page_id = p.id WHERE p.id = ? AND p.deleted_at IS NULL AND p.updated_at = ?",
+    );
+    expect(rebuildFts.args).toEqual(['page-1', expect.any(Number)]);
   });
 
-  it('does not restore a page that is not in the trash', async () => {
-    let statements = 0;
-    const db = database(() => {
-      statements += 1;
-      return { first: null };
+  it('returns false when the update restores no rows', async () => {
+    const statements: Statement[] = [];
+    const db = database((sql, args) => {
+      statements.push({ sql, args });
+      return { changes: sql.startsWith('UPDATE page') ? 0 : 1 };
     });
 
     await expect(undeletePage(db, 'missing')).resolves.toBe(false);
-    expect(statements).toBe(1);
+    expect(statements).toHaveLength(3);
+    expect(statements[0].sql).toContain('AND deleted_at IS NOT NULL');
   });
 });
 
 describe('permanentlyDeletePage', () => {
-  it('removes the page, body, revisions, and search index', async () => {
+  it('removes the page, body, revisions, and search index with deleted_at guards', async () => {
     const statements: Statement[] = [];
     const db = database((sql, args) => {
       statements.push({ sql, args });
-      if (sql.includes('SELECT id FROM page')) return { first: { id: 'page-1' } };
-      return {};
+      return { changes: sql.startsWith('DELETE FROM page WHERE') ? 1 : 0 };
     });
 
     await expect(permanentlyDeletePage(db, 'page-1')).resolves.toBe(true);
 
     const deletes = statements.filter((statement) => statement.sql.startsWith('DELETE FROM'));
-    expect(deletes.map((statement) => statement.sql)).toEqual([
-      'DELETE FROM revision WHERE page_id = ?',
-      'DELETE FROM page_fts WHERE page_id = ?',
-      'DELETE FROM page_body WHERE page_id = ?',
+    expect(deletes.map((statement) => normalizeSql(statement.sql))).toEqual([
+      'DELETE FROM revision WHERE page_id = ? AND EXISTS (SELECT 1 FROM page WHERE id = ? AND deleted_at IS NOT NULL)',
+      'DELETE FROM page_fts WHERE page_id = ? AND EXISTS (SELECT 1 FROM page WHERE id = ? AND deleted_at IS NOT NULL)',
+      'DELETE FROM page_body WHERE page_id = ? AND EXISTS (SELECT 1 FROM page WHERE id = ? AND deleted_at IS NOT NULL)',
       'DELETE FROM page WHERE id = ? AND deleted_at IS NOT NULL',
     ]);
-    for (const statement of deletes) {
-      expect(statement.args).toEqual(['page-1']);
+    for (const statement of deletes.slice(0, 3)) {
+      expect(statement.args).toEqual(['page-1', 'page-1']);
     }
+    expect(deletes[3].args).toEqual(['page-1']);
   });
 
-  it('does not purge a page that is not in the trash', async () => {
-    let statements = 0;
-    const db = database(() => {
-      statements += 1;
-      return { first: null };
+  it('returns false when the page row was not deleted', async () => {
+    const db = database((sql) => ({
+      changes: sql.startsWith('DELETE FROM page WHERE') ? 0 : 1,
+    }));
+
+    await expect(permanentlyDeletePage(db, 'page-1')).resolves.toBe(false);
+  });
+
+  it('returns false when nothing was deleted', async () => {
+    const statements: Statement[] = [];
+    const db = database((sql, args) => {
+      statements.push({ sql, args });
+      return { changes: 0 };
     });
 
     await expect(permanentlyDeletePage(db, 'missing')).resolves.toBe(false);
-    expect(statements).toBe(1);
+    expect(statements).toHaveLength(4);
+    expect(statements[3].sql).toBe('DELETE FROM page WHERE id = ? AND deleted_at IS NOT NULL');
   });
 });
 
