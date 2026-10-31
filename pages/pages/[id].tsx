@@ -3,7 +3,7 @@ import { AppShell } from '../../src/components/AppShell';
 import { Editor } from '../../src/components/Editor';
 import { Gate } from '../../src/components/Gate';
 
-export default function PageView({ user, page, revisions, pages, loginUrl }: Props) {
+export default function PageView({ user, page, revisions, pages, linkTargets, loginUrl }: Props) {
   return (
     <AppShell user={user} pages={pages} activePageId={page?.id} activeTitle={page?.title}>
       {!user ? (
@@ -19,7 +19,13 @@ export default function PageView({ user, page, revisions, pages, loginUrl }: Pro
           action={{ href: '/', label: 'ページ一覧へ戻る' }}
         />
       ) : (
-        <Editor page={page} user={user} revisions={revisions} pages={pages} />
+        <Editor
+          page={page}
+          user={user}
+          revisions={revisions}
+          pages={pages}
+          linkTargets={linkTargets}
+        />
       )}
     </AppShell>
   );

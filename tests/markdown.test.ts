@@ -106,9 +106,9 @@ describe('parseWikiLinkInner', () => {
 
 describe('createWikiResolver', () => {
   const pages: WikiLinkPage[] = [
-    { id: 'new', title: '同じ名前', updatedAt: 300 },
-    { id: 'old', title: '同じ名前', updatedAt: 100 },
-    { id: 'other', title: '別ページ', updatedAt: 200 },
+    { id: 'new', title: '同じ名前', updatedAt: 300, aliases: [] },
+    { id: 'old', title: '同じ名前', updatedAt: 100, aliases: [] },
+    { id: 'other', title: '別ページ', updatedAt: 200, aliases: [] },
   ];
 
   it('resolves duplicates to the most recently updated page', () => {
@@ -121,10 +121,30 @@ describe('createWikiResolver', () => {
     const resolve = createWikiResolver(pages);
     expect(resolve('存在しない')).toBeNull();
   });
+
+  it('falls back to aliases after current titles and picks the newest duplicate', () => {
+    const resolve = createWikiResolver([
+      { id: 'current', title: '新しい名前', updatedAt: 100, aliases: [' 古い名前 '] },
+      { id: 'alias-new', title: '別ページ', updatedAt: 300, aliases: ['共通の別名'] },
+      { id: 'alias-old', title: 'さらに別', updatedAt: 200, aliases: ['共通の別名'] },
+      { id: 'blank', title: '空の別名', updatedAt: 400, aliases: ['  '] },
+    ]);
+    expect(resolve('古い名前')?.id).toBe('current');
+    expect(resolve('共通の別名')?.id).toBe('alias-new');
+    expect(resolve('  ')).toBeNull();
+  });
+
+  it('prefers a current title over an alias even when the alias is newer', () => {
+    const resolve = createWikiResolver([
+      { id: 'title', title: '重複', updatedAt: 100, aliases: [] },
+      { id: 'alias', title: '別名持ち', updatedAt: 300, aliases: ['重複'] },
+    ]);
+    expect(resolve('重複')?.id).toBe('title');
+  });
 });
 
 describe('splitWikiText', () => {
-  const resolve = createWikiResolver([{ id: 'page-1', title: 'Zeee', updatedAt: 1 }]);
+  const resolve = createWikiResolver([{ id: 'page-1', title: 'Zeee', updatedAt: 1, aliases: [] }]);
 
   it('splits text into wiki links and resolved targets', () => {
     expect(splitWikiText('前 [[Zeee]] と [[Zeee|ゼエ]] 後', resolve)).toEqual([
@@ -133,14 +153,14 @@ describe('splitWikiText', () => {
         type: 'wiki',
         title: 'Zeee',
         label: 'Zeee',
-        target: { id: 'page-1', title: 'Zeee', updatedAt: 1 },
+        target: { id: 'page-1', title: 'Zeee', updatedAt: 1, aliases: [] },
       },
       { type: 'text', value: ' と ' },
       {
         type: 'wiki',
         title: 'Zeee',
         label: 'ゼエ',
-        target: { id: 'page-1', title: 'Zeee', updatedAt: 1 },
+        target: { id: 'page-1', title: 'Zeee', updatedAt: 1, aliases: [] },
       },
       { type: 'text', value: ' 後' },
     ]);
@@ -160,7 +180,7 @@ describe('splitWikiText', () => {
 });
 
 describe('transformWikiLinks', () => {
-  const resolve = createWikiResolver([{ id: 'page-1', title: 'Zeee', updatedAt: 1 }]);
+  const resolve = createWikiResolver([{ id: 'page-1', title: 'Zeee', updatedAt: 1, aliases: [] }]);
 
   it('converts text but leaves code, inline code, and existing links alone', () => {
     const tree: WikiNode = {

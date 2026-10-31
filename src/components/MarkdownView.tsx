@@ -19,11 +19,12 @@ import type { Backlink } from '../server/backlinks';
 import type { PageSummary } from '../server/types';
 import { rehypeHeadings } from '../markdown/headings';
 import { sameToc, type TocItem } from '../markdown/toc';
-import { createWikiResolver, remarkWikiLinks } from '../markdown/wiki';
+import { createWikiResolver, remarkWikiLinks, type LinkTarget } from '../markdown/wiki';
 
 type Props = {
   markdown: string;
   pages: PageSummary[];
+  linkTargets?: LinkTarget[];
   pageId: string;
   pageTitle: string;
   sidePanel?: boolean;
@@ -46,13 +47,24 @@ const sanitizeSchema = {
   },
 };
 
-export function MarkdownView({ markdown, pages, pageId, pageTitle, sidePanel = true }: Props) {
+export function MarkdownView({
+  markdown,
+  pages,
+  linkTargets,
+  pageId,
+  pageTitle,
+  sidePanel = true,
+}: Props) {
   const articleRef = useRef<HTMLElement>(null);
   const [toc, setToc] = useState<TocItem[]>([]);
   const [backlinks, setBacklinks] = useState<Backlink[] | null>(null);
   const [backlinksError, setBacklinksError] = useState(false);
   const [backlinksRetry, setBacklinksRetry] = useState(0);
-  const resolve = useMemo(() => createWikiResolver(pages), [pages]);
+  const targets = useMemo(
+    () => linkTargets ?? pages.map((page) => ({ ...page, aliases: [] as string[] })),
+    [linkTargets, pages],
+  );
+  const resolve = useMemo(() => createWikiResolver(targets), [targets]);
 
   useEffect(() => {
     const root = articleRef.current;
