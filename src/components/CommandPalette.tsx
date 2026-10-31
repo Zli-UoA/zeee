@@ -497,7 +497,7 @@ export function CommandPalette({ open, intent, onOpenChange, recentPages }: Prop
 
           <div className="hidden items-center justify-between gap-3 border-t border-kumo-line bg-kumo-elevated px-4 py-2 text-xs text-kumo-subtle sm:flex">
             <span>↑↓ 選択</span>
-            <span>Enter 開く</span>
+            <span>Enter 決定</span>
             {createIndex >= 0 ? <span>⌘/Ctrl+Enter 作成</span> : null}
             <span>Esc 閉じる</span>
           </div>

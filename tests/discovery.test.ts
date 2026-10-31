@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vite-plus/test';
 import { splitHighlight } from '../src/client/highlight';
 import { buildPaletteActions, normalizeSearchResults } from '../src/client/palette';
+import { sidebarPageLists } from '../src/client/sidebarPages';
 import {
   clearLegacyRecentPages,
   loadRecentPages,
@@ -11,6 +12,7 @@ import {
   withRecentPage,
   type RecentPage,
 } from '../src/client/useRecentPages';
+import type { PageSummary } from '../src/server/types';
 
 describe('splitHighlight', () => {
   it('splits text into highlighted and plain parts', () => {
@@ -168,6 +170,46 @@ describe('recent pages', () => {
     expect(storage.getItem(RECENT_PAGES_STORAGE_KEY)).toBeNull();
   });
 });
+
+describe('sidebar page lists', () => {
+  it('shows recent pages once and keeps the rest of the page list in order', () => {
+    const pages = [pageSummary('page-1'), pageSummary('page-2'), pageSummary('page-3')];
+    const recent = [
+      { id: 'page-2', title: 'Page 2', visitedAt: 2 },
+      { id: 'page-1', title: 'Page 1', visitedAt: 1 },
+    ];
+
+    expect(sidebarPageLists(pages, recent)).toEqual({
+      recentPages: recent,
+      otherPages: [pageSummary('page-3')],
+    });
+  });
+
+  it('keeps recent pages in the list when the sidebar limit hides them', () => {
+    const pages = [pageSummary('page-1'), pageSummary('page-2'), pageSummary('page-3')];
+    const recent = [
+      { id: 'page-1', title: 'Page 1', visitedAt: 3 },
+      { id: 'page-2', title: 'Page 2', visitedAt: 2 },
+      { id: 'page-3', title: 'Page 3', visitedAt: 1 },
+    ];
+
+    expect(sidebarPageLists(pages, recent, 2)).toEqual({
+      recentPages: recent.slice(0, 2),
+      otherPages: [pageSummary('page-3')],
+    });
+  });
+});
+
+function pageSummary(id: string): PageSummary {
+  return {
+    id,
+    title: id,
+    createdAt: 0,
+    createdByName: '',
+    excerpt: '',
+    updatedAt: 0,
+  };
+}
 
 function memoryStorage(initial: Record<string, string> = {}) {
   const values = new Map(Object.entries(initial));
