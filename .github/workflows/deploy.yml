@@ -1,0 +1,164 @@
+name: Deploy
+
+on:
+  workflow_run:
+    workflows:
+      - CI
+    types:
+      - completed
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Commit SHA or ref to deploy
+        required: false
+        default: main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-zeee-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: production
+    env:
+      CELLD_BUCKET: ${{ vars.CELLD_BUCKET || 's3://zeee-fleet' }}
+      S3_ENDPOINT: ${{ vars.S3_ENDPOINT || 'https://c9918f2caa050736a07867e6f968c0a2.r2.cloudflarestorage.com' }}
+      AWS_REGION: ${{ vars.AWS_REGION || 'auto' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || inputs.ref }}
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 12.16.1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24.11.0
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Check
+        run: pnpm check
+
+      - name: Test
+        run: pnpm test
+
+      - name: Build for celld
+        run: pnpm build:celld
+
+      - name: Validate dist/wrangler.json
+        run: |
+          node --input-type=module <<'EOF'
+          import { existsSync, readFileSync } from 'node:fs';
+
+          const fail = (message) => {
+            console.error(`::error::${message}`);
+            process.exit(1);
+          };
+
+          const config = JSON.parse(readFileSync('dist/wrangler.json', 'utf8'));
+
+          if (config.name !== 'zeee') {
+            fail(`Expected worker name "zeee", got ${JSON.stringify(config.name)}`);
+          }
+
+          if (config.vars?.PUBLIC_ORIGIN !== 'https://zeee.zli.works') {
+            fail(`Expected PUBLIC_ORIGIN "https://zeee.zli.works", got ${JSON.stringify(config.vars?.PUBLIC_ORIGIN)}`);
+          }
+
+          for (const key of ['AUTHZ_ISSUER', 'AUTHZ_CLIENT_ID']) {
+            if (!config.vars?.[key]) {
+              fail(`Missing vars.${key}`);
+            }
+          }
+
+          if (Object.hasOwn(config.vars ?? {}, 'ZEEE_DEV_AUTH')) {
+            fail('ZEEE_DEV_AUTH must not be present in the production config');
+          }
+
+          const db = (config.d1_databases ?? []).find((binding) => binding.binding === 'DB');
+          if (!db) {
+            fail('Missing D1 binding "DB"');
+          }
+          const dbName = db.database_name ?? db.name;
+          if (dbName !== 'zeee') {
+            fail(`Expected D1 database name "zeee", got ${JSON.stringify(dbName)}`);
+          }
+
+          const pageRoom = (config.durable_objects?.bindings ?? []).find((binding) => binding.name === 'PAGE_ROOM');
+          if (!pageRoom) {
+            fail('Missing Durable Object binding "PAGE_ROOM"');
+          }
+
+          if (existsSync('dist/.dev.vars')) {
+            fail('dist/.dev.vars must not be shipped');
+          }
+
+          console.log('dist/wrangler.json validation passed');
+          EOF
+
+      - name: Check R2 configuration
+        id: r2
+        env:
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+        run: |
+          if [ -z "$R2_ACCESS_KEY_ID" ] || [ -z "$R2_SECRET_ACCESS_KEY" ]; then
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=R2 secrets 未設定::R2 secrets 未設定のため deploy を skip します。secrets 設定後に workflow_dispatch で実行してください。"
+            {
+              echo "## Deploy skipped"
+              echo ""
+              echo "R2 secrets 未設定のため skip しました。"
+              echo ""
+              echo "Environment \`production\` の secrets \`R2_ACCESS_KEY_ID\` / \`R2_SECRET_ACCESS_KEY\` を https://github.com/Zli-UoA/zeee/settings/environments で設定したうえで、workflow_dispatch で再実行してください。"
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          echo "configured=true" >> "$GITHUB_OUTPUT"
+          echo "R2 configuration present"
+
+      - name: Install celld
+        if: steps.r2.outputs.configured == 'true'
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/celld.gz" "https://github.com/denoland/celld/releases/download/v0.6.2/celld-x86_64-unknown-linux-gnu.gz"
+          gunzip -f "$RUNNER_TEMP/celld.gz"
+          chmod +x "$RUNNER_TEMP/celld"
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/celld" --version
+
+      - name: Deploy
+        if: steps.r2.outputs.configured == 'true'
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+        run: CELLD_ESBUILD="$PWD/node_modules/.bin/esbuild" celld deploy dist
+
+      - name: Verify production health
+        if: steps.r2.outputs.configured == 'true'
+        run: |
+          for attempt in $(seq 1 30); do
+            if curl -fsS --max-time 10 https://zeee.zli.works/api/health; then
+              echo ""
+              echo "Health check passed on attempt $attempt"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "::error::https://zeee.zli.works/api/health did not become healthy after 30 attempts"
+          exit 1
