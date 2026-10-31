@@ -30,6 +30,10 @@ export type PageRecord = PageSummary & {
   createdBy: string;
 };
 
+export type DeletedPageSummary = PageSummary & {
+  deletedAt: number;
+};
+
 export type RevisionRecord = {
   id: string;
   pageId: string;

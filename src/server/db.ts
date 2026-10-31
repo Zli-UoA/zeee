@@ -2,6 +2,7 @@ import { randomToken, sha256Base64Url, uuid } from './crypto';
 import { ensureSchema } from './schema';
 import {
   PAGE_LIST_LIMIT,
+  type DeletedPageSummary,
   type PageRecord,
   type PageSort,
   type PageSummary,
@@ -36,6 +37,10 @@ type PageSummaryRow = {
   updated_at: number;
   created_by_name: string | null;
   excerpt_source: string | null;
+};
+
+type DeletedPageRow = PageSummaryRow & {
+  deleted_at: number;
 };
 
 type SearchRow = {
@@ -198,6 +203,24 @@ export async function listPages(db: D1Database): Promise<PageSummary[]> {
   return (result.results ?? []).map(toPageSummary);
 }
 
+export async function listDeletedPages(db: D1Database): Promise<DeletedPageSummary[]> {
+  await ensureSchema(db);
+  const result = await db
+    .prepare(
+      `SELECT p.id, p.title, p.created_at, p.updated_at, p.deleted_at,
+              u.display_name AS created_by_name,
+              substr(COALESCE(b.markdown, ''), 1, ${EXCERPT_SOURCE_LENGTH}) AS excerpt_source
+       FROM page p
+       LEFT JOIN app_user u ON u.id = p.created_by
+       LEFT JOIN page_body b ON b.page_id = p.id
+       WHERE p.deleted_at IS NOT NULL
+       ORDER BY p.deleted_at DESC
+       LIMIT ${PAGE_LIST_LIMIT}`,
+    )
+    .all<DeletedPageRow>();
+  return (result.results ?? []).map(toDeletedPageSummary);
+}
+
 export function sortPageSummaries(pages: PageSummary[], sort: PageSort): PageSummary[] {
   const sorted = [...pages];
   if (sort === 'title') {
@@ -257,6 +280,13 @@ function toPageSummary(row: PageSummaryRow): PageSummary {
     createdByName: row.created_by_name ?? '',
     excerpt: excerptFromMarkdown(row.excerpt_source ?? ''),
     updatedAt: row.updated_at,
+  };
+}
+
+function toDeletedPageSummary(row: DeletedPageRow): DeletedPageSummary {
+  return {
+    ...toPageSummary(row),
+    deletedAt: row.deleted_at,
   };
 }
 
@@ -352,6 +382,59 @@ export async function softDeletePage(db: D1Database, pageId: string): Promise<vo
       .bind(timestamp, timestamp, pageId),
     db.prepare('DELETE FROM page_fts WHERE page_id = ?').bind(pageId),
   ]);
+}
+
+export async function undeletePage(db: D1Database, pageId: string): Promise<boolean> {
+  await ensureSchema(db);
+  const timestamp = Date.now();
+  const results = await db.batch([
+    db
+      .prepare(
+        'UPDATE page SET deleted_at = NULL, updated_at = ? WHERE id = ? AND deleted_at IS NOT NULL',
+      )
+      .bind(timestamp, pageId),
+    db
+      .prepare(
+        `DELETE FROM page_fts WHERE page_id = ?
+         AND EXISTS (SELECT 1 FROM page WHERE id = ? AND deleted_at IS NULL AND updated_at = ?)`,
+      )
+      .bind(pageId, pageId, timestamp),
+    db
+      .prepare(
+        `INSERT INTO page_fts (page_id, title, body)
+         SELECT p.id, p.title, COALESCE(b.markdown, '') FROM page p
+         LEFT JOIN page_body b ON b.page_id = p.id
+         WHERE p.id = ? AND p.deleted_at IS NULL AND p.updated_at = ?`,
+      )
+      .bind(pageId, timestamp),
+  ]);
+  return (results[0]?.meta.changes ?? 0) > 0;
+}
+
+export async function permanentlyDeletePage(db: D1Database, pageId: string): Promise<boolean> {
+  await ensureSchema(db);
+  const results = await db.batch([
+    db
+      .prepare(
+        `DELETE FROM revision WHERE page_id = ?
+         AND EXISTS (SELECT 1 FROM page WHERE id = ? AND deleted_at IS NOT NULL)`,
+      )
+      .bind(pageId, pageId),
+    db
+      .prepare(
+        `DELETE FROM page_fts WHERE page_id = ?
+         AND EXISTS (SELECT 1 FROM page WHERE id = ? AND deleted_at IS NOT NULL)`,
+      )
+      .bind(pageId, pageId),
+    db
+      .prepare(
+        `DELETE FROM page_body WHERE page_id = ?
+         AND EXISTS (SELECT 1 FROM page WHERE id = ? AND deleted_at IS NOT NULL)`,
+      )
+      .bind(pageId, pageId),
+    db.prepare('DELETE FROM page WHERE id = ? AND deleted_at IS NOT NULL').bind(pageId),
+  ]);
+  return (results[results.length - 1]?.meta.changes ?? 0) > 0;
 }
 
 export async function materializePage(
