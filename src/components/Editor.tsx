@@ -11,6 +11,7 @@ import remarkGfm from 'remark-gfm';
 import rehypeSanitize from 'rehype-sanitize';
 import { Badge, Button, DropdownMenu, Empty, Input, LayerCard, Text } from '@cloudflare/kumo';
 import {
+  ArrowClockwiseIcon,
   ArrowCounterClockwiseIcon,
   ClockCounterClockwiseIcon,
   DotsThreeIcon,
@@ -20,9 +21,15 @@ import {
   TrashIcon,
   XIcon,
 } from '@phosphor-icons/react';
-import { ZeeeProvider, type Collaborator, type ConnectionStatus } from '../client/provider';
+import {
+  ZeeeProvider,
+  type Collaborator,
+  type ConnectionStatus,
+  type SaveStatus,
+} from '../client/provider';
 import type { PageRecord, RevisionRecord, SessionUser } from '../server/types';
 import { formatDate } from '../shared/format';
+import { RevisionPreview } from './RevisionPreview';
 
 type Props = {
   page: PageRecord;
@@ -89,15 +96,22 @@ export function Editor({ page, user, revisions }: Props) {
   const editorRef = useRef<HTMLDivElement>(null);
   const historyRef = useRef<HTMLDivElement>(null);
   const renderTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const providerRef = useRef<ZeeeProvider | null>(null);
+  const composingRef = useRef(false);
+  const titleSaveSeqRef = useRef(0);
   const [mode, setMode] = useState<Mode>('read');
   const [markdown, setMarkdown] = useState(page.markdown);
   const [collaboration, setCollaboration] = useState<Collaboration | null>(null);
   const [title, setTitle] = useState(page.title);
   const [savedTitle, setSavedTitle] = useState(page.title);
   const [status, setStatus] = useState<ConnectionStatus>('connecting');
+  const [saveStatus, setSaveStatus] = useState<SaveStatus>({ state: 'saved', pending: 0 });
   const [users, setUsers] = useState<Collaborator[]>([]);
   const [busy, setBusy] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [previewRevision, setPreviewRevision] = useState<RevisionRecord | null>(null);
+  const [restoreBusy, setRestoreBusy] = useState(false);
+  const [restoreError, setRestoreError] = useState('');
   const [error, setError] = useState('');
 
   useEffect(() => {
@@ -134,7 +148,16 @@ export function Editor({ page, user, revisions }: Props) {
         };
         text.observe(observer);
 
-        provider = new ZeeeProvider(page.id, doc, awareness, seed, setStatus, setUsers);
+        provider = new ZeeeProvider(
+          page.id,
+          doc,
+          awareness,
+          seed,
+          setStatus,
+          setUsers,
+          setSaveStatus,
+        );
+        providerRef.current = provider;
         setCollaboration({ text, awareness, undoManager });
       } catch (loadError) {
         setError(loadError instanceof Error ? loadError.message : '本文を読み込めませんでした');
@@ -150,12 +173,66 @@ export function Editor({ page, user, revisions }: Props) {
       }
       if (observer) text.unobserve(observer);
       provider?.destroy();
+      providerRef.current = null;
       undoManager.destroy();
       awareness.destroy();
       doc.destroy();
       setCollaboration(null);
     };
   }, [page.id]);
+
+  useEffect(() => {
+    const start = () => {
+      composingRef.current = true;
+    };
+    const end = () => {
+      composingRef.current = false;
+    };
+    window.addEventListener('compositionstart', start, true);
+    window.addEventListener('compositionend', end, true);
+    return () => {
+      window.removeEventListener('compositionstart', start, true);
+      window.removeEventListener('compositionend', end, true);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (title === savedTitle) return;
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [title, savedTitle]);
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.isComposing || event.keyCode === 229 || composingRef.current) return;
+      if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey) return;
+
+      const key = event.key.toLowerCase();
+      if (key === 'e') {
+        event.preventDefault();
+        const active = document.activeElement;
+        if (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) {
+          active.blur();
+        }
+        toggleMode();
+        return;
+      }
+      if (key === 's') {
+        event.preventDefault();
+        const active = document.activeElement;
+        if (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) {
+          active.blur();
+        }
+        if (!busy) void saveRevision();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [mode, collaboration, markdown, busy]);
 
   useEffect(() => {
     if (mode !== 'edit' || !collaboration || !editorRef.current) return;
@@ -189,59 +266,95 @@ export function Editor({ page, user, revisions }: Props) {
     }
   }, [historyOpen]);
 
+  function toggleMode() {
+    if (mode === 'read') {
+      setMode('edit');
+      return;
+    }
+    collaboration?.awareness.setLocalStateField('cursor', null);
+    setMarkdown(collaboration?.text.toJSON() ?? markdown);
+    setMode('read');
+  }
+
   async function saveTitle() {
     const next = title.trim();
     if (!next) {
       setTitle(savedTitle);
       return;
     }
-    if (next === savedTitle) return;
-
-    setError('');
-    const response = await fetch(`/api/pages/${page.id}`, {
-      method: 'PATCH',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ title: next }),
-      keepalive: true,
-    });
-    if (!response.ok) {
-      setError('タイトルを保存できませんでした');
+    if (next === savedTitle) {
+      setTitle(next);
       return;
     }
-    setTitle(next);
-    setSavedTitle(next);
-    window.dispatchEvent(
-      new CustomEvent('zeee:page-renamed', { detail: { id: page.id, title: next } }),
-    );
+
+    setError('');
+    const seq = titleSaveSeqRef.current + 1;
+    titleSaveSeqRef.current = seq;
+    try {
+      const response = await fetch(`/api/pages/${page.id}`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ title: next }),
+        keepalive: true,
+      });
+      if (seq !== titleSaveSeqRef.current) return;
+      if (!response.ok) {
+        setError('タイトルを保存できませんでした');
+        return;
+      }
+      setTitle((current) => (current.trim() === next ? next : current));
+      setSavedTitle(next);
+      window.dispatchEvent(
+        new CustomEvent('zeee:page-renamed', { detail: { id: page.id, title: next } }),
+      );
+    } catch {
+      if (seq === titleSaveSeqRef.current) setError('タイトルを保存できませんでした');
+    }
   }
 
   async function saveRevision() {
+    if (busy) return;
     setBusy(true);
     setError('');
-    const response = await fetch(`/api/pages/${page.id}/snapshot`, { method: 'POST' });
-    if (!response.ok) {
+    try {
+      const response = await fetch(`/api/pages/${page.id}/snapshot`, { method: 'POST' });
+      if (!response.ok) {
+        setError('版を保存できませんでした');
+        setBusy(false);
+        return;
+      }
+      window.location.reload();
+    } catch {
       setError('版を保存できませんでした');
       setBusy(false);
-      return;
     }
-    window.location.reload();
   }
 
-  async function restore(version: number) {
-    if (!window.confirm(`v${version} の内容に戻しますか？`)) return;
-    setBusy(true);
-    setError('');
-    const response = await fetch(`/api/pages/${page.id}/restore`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ version }),
-    });
-    if (!response.ok) {
-      setError('復元できませんでした');
-      setBusy(false);
-      return;
+  function openRevisionPreview(revision: RevisionRecord) {
+    setRestoreError('');
+    setPreviewRevision(revision);
+  }
+
+  async function restoreRevision() {
+    if (!previewRevision || restoreBusy) return;
+    setRestoreBusy(true);
+    setRestoreError('');
+    try {
+      const response = await fetch(`/api/pages/${page.id}/restore`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ version: previewRevision.version }),
+      });
+      if (!response.ok) {
+        setRestoreError('復元できませんでした。接続を確認して再試行してください。');
+        setRestoreBusy(false);
+        return;
+      }
+      window.location.reload();
+    } catch {
+      setRestoreError('復元できませんでした。接続を確認して再試行してください。');
+      setRestoreBusy(false);
     }
-    window.location.reload();
   }
 
   async function remove() {
@@ -296,11 +409,11 @@ export function Editor({ page, user, revisions }: Props) {
           </div>
 
           <div className="flex flex-wrap items-center gap-2 sm:flex-nowrap">
-            {status !== 'connected' ? (
-              <Badge appearance="dot" variant={badgeForStatus(status)} aria-live="polite">
-                {statusLabel(status)}
-              </Badge>
-            ) : null}
+            <SaveStatusBadge
+              connection={status}
+              save={saveStatus}
+              onRetry={() => providerRef.current?.retry()}
+            />
             {others.map((item) => (
               <Badge variant="neutral" key={`${item.name}-${item.color}`}>
                 {item.name}
@@ -312,13 +425,13 @@ export function Editor({ page, user, revisions }: Props) {
                 type="button"
                 variant={mode === 'read' ? 'primary' : 'secondary'}
                 icon={mode === 'read' ? <PencilSimpleIcon size={15} /> : <EyeIcon size={15} />}
-                onClick={() => {
-                  if (mode === 'edit') {
-                    collaboration?.awareness.setLocalStateField('cursor', null);
-                    setMarkdown(collaboration?.text.toJSON() ?? markdown);
-                  }
-                  setMode(mode === 'read' ? 'edit' : 'read');
-                }}
+                onClick={toggleMode}
+                title={
+                  mode === 'read'
+                    ? '編集モードに切り替え（⌘E / Ctrl+E）'
+                    : '閲覧モードに切り替え（⌘E / Ctrl+E）'
+                }
+                aria-keyshortcuts="Meta+E Control+E"
               >
                 {mode === 'read' ? '編集' : '閲覧'}
               </Button>
@@ -361,7 +474,11 @@ export function Editor({ page, user, revisions }: Props) {
       </div>
 
       {error ? (
-        <div className={historyOpen ? 'xl:pe-[calc(280px+1rem)]' : undefined}>
+        <div
+          className={historyOpen ? 'xl:pe-[calc(280px+1rem)]' : undefined}
+          role="alert"
+          aria-live="polite"
+        >
           <Text variant="error" size="sm">
             {error}
           </Text>
@@ -444,7 +561,9 @@ export function Editor({ page, user, revisions }: Props) {
                     variant="secondary"
                     icon={<FloppyDiskIcon size={15} />}
                     onClick={saveRevision}
-                    disabled={busy}
+                    disabled={busy || restoreBusy}
+                    title="現在の版を保存（⌘S / Ctrl+S）"
+                    aria-keyshortcuts="Meta+S Control+S"
                     className="w-full"
                   >
                     現在の版を保存
@@ -476,9 +595,9 @@ export function Editor({ page, user, revisions }: Props) {
                           type="button"
                           variant="ghost"
                           icon={<ArrowCounterClockwiseIcon size={15} />}
-                          onClick={() => restore(revision.version)}
-                          disabled={busy}
-                          aria-label={`v${revision.version} に戻す`}
+                          onClick={() => openRevisionPreview(revision)}
+                          disabled={busy || restoreBusy}
+                          aria-label={`v${revision.version} の内容を確認して戻す`}
                         >
                           戻す
                         </Button>
@@ -491,20 +610,130 @@ export function Editor({ page, user, revisions }: Props) {
           </div>
         ) : null}
       </div>
+
+      {previewRevision ? (
+        <RevisionPreview
+          revision={previewRevision}
+          currentMarkdown={collaboration?.text.toJSON() ?? markdown}
+          busy={restoreBusy}
+          error={restoreError}
+          onOpenChange={(open) => {
+            if (open || restoreBusy) return;
+            setPreviewRevision(null);
+            setRestoreError('');
+          }}
+          onConfirm={() => void restoreRevision()}
+        />
+      ) : null}
     </div>
   );
 }
 
-function statusLabel(status: ConnectionStatus): string {
-  if (status === 'connected') return '接続済み';
-  if (status === 'reconnecting') return '再接続中';
-  return '接続中';
+type SaveStatusDisplay = {
+  label: string;
+  variant: 'success' | 'warning' | 'neutral' | 'error';
+  title: string;
+};
+
+function saveStatusDisplay(connection: ConnectionStatus, save: SaveStatus): SaveStatusDisplay {
+  if (save.state === 'failed') {
+    return {
+      label: '保存失敗',
+      variant: 'error',
+      title: 'サーバーに保存できませんでした。再試行してください。',
+    };
+  }
+  if (save.state === 'unsent') {
+    if (connection === 'connecting') {
+      return { label: '接続中', variant: 'neutral', title: 'サーバーに接続しています。' };
+    }
+    return connection === 'reconnecting'
+      ? {
+          label: '未保存（再接続中）',
+          variant: 'warning',
+          title: 'この端末の変更はまだサーバーに届いていません。再接続後に自動で送信します。',
+        }
+      : {
+          label: '未保存（接続断）',
+          variant: 'warning',
+          title: 'この端末の変更はまだサーバーに届いていません。接続が戻ると自動で送信します。',
+        };
+  }
+  if (connection === 'connecting') {
+    return { label: '接続中', variant: 'neutral', title: 'サーバーに接続しています。' };
+  }
+  if (connection === 'reconnecting') {
+    return { label: '再接続中', variant: 'warning', title: 'サーバーとの接続を復旧しています。' };
+  }
+  if (save.state === 'saving') {
+    return { label: '保存中', variant: 'neutral', title: '変更をサーバーに送信しています。' };
+  }
+  return {
+    label: '保存済み',
+    variant: 'success',
+    title: '変更はサーバーに保存済みです。検索や履歴への反映（D1）は非同期で少し遅れます。',
+  };
 }
 
-function badgeForStatus(status: ConnectionStatus): 'success' | 'warning' | 'neutral' {
-  if (status === 'connected') return 'success';
-  if (status === 'reconnecting') return 'warning';
-  return 'neutral';
+function SaveStatusBadge({
+  connection,
+  save,
+  onRetry,
+}: {
+  connection: ConnectionStatus;
+  save: SaveStatus;
+  onRetry: () => void;
+}) {
+  const display = saveStatusDisplay(connection, save);
+  const [announcement, setAnnouncement] = useState('');
+
+  useEffect(() => {
+    let message = '';
+    let delay = 0;
+    if (save.state === 'failed') {
+      message = '保存に失敗しました。再試行できます。';
+    } else if (save.state === 'unsent') {
+      message =
+        connection === 'reconnecting'
+          ? '未保存の変更があります。再接続中です。'
+          : '未保存の変更があります。接続が切れています。';
+    } else if (connection === 'connecting') {
+      message = 'サーバーに接続しています。';
+    } else if (connection === 'reconnecting') {
+      message = 'サーバーに再接続中です。';
+    } else if (save.state === 'saving') {
+      message = '保存中です。';
+      delay = 1000;
+    } else {
+      message = '保存済みです。';
+      delay = 600;
+    }
+    const timer = setTimeout(() => setAnnouncement(message), delay);
+    return () => clearTimeout(timer);
+  }, [connection, save.state]);
+
+  return (
+    <div className="flex items-center gap-1">
+      <span title={display.title} className="inline-flex">
+        <Badge appearance="dot" variant={display.variant}>
+          {display.label}
+        </Badge>
+      </span>
+      <span className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+        {announcement}
+      </span>
+      {save.state === 'failed' ? (
+        <Button
+          type="button"
+          variant="secondary"
+          icon={<ArrowClockwiseIcon size={14} />}
+          onClick={onRetry}
+        >
+          再試行
+        </Button>
+      ) : null}
+    </div>
+  );
 }
 
 function colorFor(name: string): string {

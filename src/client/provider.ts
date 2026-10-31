@@ -4,6 +4,11 @@ import { decodeBase64, encodeBase64 } from '../shared/base64';
 
 export type ConnectionStatus = 'connecting' | 'connected' | 'reconnecting';
 
+export type SaveStatus = {
+  state: 'saved' | 'saving' | 'unsent' | 'failed';
+  pending: number;
+};
+
 export type Collaborator = {
   name: string;
   color: string;
@@ -17,12 +22,22 @@ type AwarenessChange = {
   removed: number[];
 };
 
+type ServerMessage = {
+  type?: 'sync' | 'update' | 'awareness' | 'ack' | 'nack';
+  update?: string;
+  clientSeq?: number;
+};
+
 export class ZeeeProvider {
   private socket: WebSocket | null = null;
   private closed = false;
+  private connection: ConnectionStatus = 'connecting';
   private reconnectDelay = 500;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private pingTimer: ReturnType<typeof setInterval> | null = null;
+  private pending = new Map<number, string>();
+  private nextClientSeq = 1;
+  private failed = false;
   private readonly updateHandler: (update: Uint8Array, origin: unknown) => void;
   private readonly awarenessHandler: (change: AwarenessChange) => void;
 
@@ -30,13 +45,14 @@ export class ZeeeProvider {
     private readonly pageId: string,
     private readonly doc: Y.Doc,
     private readonly awareness: Awareness,
-    private seed: boolean,
+    seed: boolean,
     private readonly onStatus: (status: ConnectionStatus) => void,
     private readonly onUsers: (users: Collaborator[]) => void,
+    private readonly onSaveStatus: (status: SaveStatus) => void,
   ) {
     this.updateHandler = (update, origin) => {
       if (origin === 'remote') return;
-      this.send({ type: 'update', update: encodeBase64(update) });
+      this.queueUpdate(update);
     };
     this.awarenessHandler = ({ added, updated, removed }) => {
       const update = encodeAwarenessUpdate(this.awareness, [...added, ...updated, ...removed]);
@@ -46,12 +62,15 @@ export class ZeeeProvider {
 
     doc.on('update', this.updateHandler);
     awareness.on('update', this.awarenessHandler);
+    if (seed) this.queueUpdate(Y.encodeStateAsUpdate(doc));
     this.connect();
   }
 
   private connect(): void {
     if (this.closed) return;
-    this.onStatus(this.socket ? 'reconnecting' : 'connecting');
+    if (this.connection !== 'connecting') this.connection = 'reconnecting';
+    this.onStatus(this.connection);
+    this.notifySaveStatus();
 
     const url = new URL(`/api/pages/${this.pageId}/ws`, window.location.href);
     url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -59,12 +78,12 @@ export class ZeeeProvider {
     this.socket = socket;
 
     socket.addEventListener('open', () => {
+      if (this.socket !== socket) return;
       this.reconnectDelay = 500;
+      this.connection = 'connected';
       this.onStatus('connected');
-      if (this.seed) {
-        this.seed = false;
-        this.send({ type: 'update', update: encodeBase64(Y.encodeStateAsUpdate(this.doc)) });
-      }
+      for (const [clientSeq, update] of this.pending) this.transmit(clientSeq, update);
+      this.notifySaveStatus();
       this.send({
         type: 'sync',
         stateVector: encodeBase64(Y.encodeStateVector(this.doc)),
@@ -79,11 +98,25 @@ export class ZeeeProvider {
     });
 
     socket.addEventListener('message', (event) => {
+      if (this.socket !== socket) return;
       if (typeof event.data !== 'string' || event.data === 'pong') return;
-      let message: { type?: string; update?: string };
+      let message: ServerMessage;
       try {
-        message = JSON.parse(event.data);
+        message = JSON.parse(event.data) as ServerMessage;
       } catch {
+        return;
+      }
+      if (message.type === 'ack') {
+        if (typeof message.clientSeq !== 'number') return;
+        if (!this.pending.delete(message.clientSeq)) return;
+        if (this.pending.size === 0) this.failed = false;
+        this.notifySaveStatus();
+        return;
+      }
+      if (message.type === 'nack') {
+        if (typeof message.clientSeq !== 'number' || !this.pending.has(message.clientSeq)) return;
+        this.failed = true;
+        this.notifySaveStatus();
         return;
       }
       if (message.type === 'sync' || message.type === 'update') {
@@ -98,11 +131,14 @@ export class ZeeeProvider {
     });
 
     socket.addEventListener('close', () => {
+      if (this.socket !== socket) return;
       if (this.pingTimer) clearInterval(this.pingTimer);
       this.pingTimer = null;
       this.socket = null;
       if (this.closed) return;
+      this.connection = 'reconnecting';
       this.onStatus('reconnecting');
+      this.notifySaveStatus();
       this.reconnectTimer = setTimeout(() => {
         this.reconnectTimer = null;
         this.connect();
@@ -110,7 +146,59 @@ export class ZeeeProvider {
       this.reconnectDelay = Math.min(this.reconnectDelay * 2, 10_000);
     });
 
-    socket.addEventListener('error', () => socket.close());
+    socket.addEventListener('error', () => {
+      if (this.socket === socket) socket.close();
+    });
+  }
+
+  retry(): void {
+    this.failed = false;
+    if (this.socket?.readyState === WebSocket.OPEN) {
+      for (const [clientSeq, update] of this.pending) this.transmit(clientSeq, update);
+      this.notifySaveStatus();
+      return;
+    }
+    if (this.socket?.readyState === WebSocket.CONNECTING) {
+      this.notifySaveStatus();
+      return;
+    }
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    this.connect();
+  }
+
+  private queueUpdate(update: Uint8Array): void {
+    const clientSeq = this.nextClientSeq;
+    this.nextClientSeq += 1;
+    const encoded = encodeBase64(update);
+    this.pending.set(clientSeq, encoded);
+    this.notifySaveStatus();
+    this.transmit(clientSeq, encoded);
+  }
+
+  private transmit(clientSeq: number, update: string): void {
+    const socket = this.socket;
+    if (!socket || socket.readyState !== WebSocket.OPEN) return;
+    try {
+      socket.send(JSON.stringify({ type: 'update', update, clientSeq }));
+    } catch {
+      this.failed = true;
+      this.notifySaveStatus();
+    }
+  }
+
+  private notifySaveStatus(): void {
+    const pending = this.pending.size;
+    const state = this.failed
+      ? 'failed'
+      : pending > 0
+        ? this.connection === 'connected'
+          ? 'saving'
+          : 'unsent'
+        : 'saved';
+    this.onSaveStatus({ state, pending });
   }
 
   private send(message: unknown): void {
