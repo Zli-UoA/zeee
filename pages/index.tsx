@@ -40,9 +40,18 @@ const GROUP_LABELS: { key: GroupKey; label: string }[] = [
   { key: 'older', label: 'それ以前' },
 ];
 
-export default function Home({ user, pages, query, sort, results, now, loginUrl }: Props) {
+export default function Home({
+  user,
+  pages,
+  sidebarPages,
+  query,
+  sort,
+  results,
+  now,
+  loginUrl,
+}: Props) {
   return (
-    <AppShell user={user} pages={pages} query={query}>
+    <AppShell user={user} pages={sidebarPages} query={query}>
       {!user ? (
         <Gate
           title="Zeee は Zli のための知識ベース"
@@ -196,7 +205,11 @@ export default function Home({ user, pages, query, sort, results, now, loginUrl 
                     <LayerCard className="overflow-hidden p-0">
                       <ul className="divide-y divide-kumo-line">
                         {group.pages.map((page) => (
-                          <PageRow key={page.id} page={page} />
+                          <PageRow
+                            key={page.id}
+                            page={page}
+                            dateField={sort === 'created' ? 'createdAt' : 'updatedAt'}
+                          />
                         ))}
                       </ul>
                     </LayerCard>
@@ -264,7 +277,14 @@ function dayNumber(timestamp: number): number {
   return Math.floor(Date.UTC(year, month - 1, day) / 86_400_000);
 }
 
-function PageRow({ page }: { page: PageSummary }) {
+function PageRow({
+  page,
+  dateField = 'updatedAt',
+}: {
+  page: PageSummary;
+  dateField?: 'createdAt' | 'updatedAt';
+}) {
+  const timestamp = page[dateField];
   return (
     <li>
       <a
@@ -279,10 +299,8 @@ function PageRow({ page }: { page: PageSummary }) {
           <span className="max-w-full truncate">{page.createdByName || '不明なユーザー'}</span>
           <span aria-hidden="true">·</span>
           <span>
-            <span className="sr-only">更新日時 </span>
-            <time dateTime={new Date(page.updatedAt).toISOString()}>
-              {formatDate(page.updatedAt)}
-            </time>
+            <span className="sr-only">{dateField === 'createdAt' ? '作成日時' : '更新日時'} </span>
+            <time dateTime={new Date(timestamp).toISOString()}>{formatDate(timestamp)}</time>
           </span>
         </span>
       </a>

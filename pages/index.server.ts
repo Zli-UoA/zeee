@@ -13,6 +13,7 @@ import type { Env, PageSort, PageSummary, SearchResult, SessionUser } from '../s
 export type Props = {
   user: SessionUser | null;
   pages: PageSummary[];
+  sidebarPages: PageSummary[];
   query: string;
   sort: PageSort;
   results: SearchResult[];
@@ -31,6 +32,7 @@ export const loader = defineHandler(async (c): Promise<Props> => {
     return {
       user: null,
       pages: [],
+      sidebarPages: [],
       query: '',
       sort: 'updated',
       results: [],
@@ -43,10 +45,12 @@ export const loader = defineHandler(async (c): Promise<Props> => {
   const url = new URL(c.req.url);
   const query = (url.searchParams.get('q') ?? '').trim();
   const sort = parseSort(url.searchParams.get('sort'));
-  const pages = sortPageSummaries(await listPages(env.DB), sort);
+  const sidebarPages = await listPages(env.DB);
+  const pages = sortPageSummaries(sidebarPages, sort);
   return {
     user,
     pages,
+    sidebarPages,
     query,
     sort,
     results: query ? await searchPages(env.DB, query) : [],
