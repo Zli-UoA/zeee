@@ -6,6 +6,10 @@ export type Env = {
   PUBLIC_ORIGIN?: string;
 };
 
+export const PAGE_LIST_LIMIT = 200;
+
+export type PageSort = 'updated' | 'created' | 'title';
+
 export type SessionUser = {
   id: string;
   username: string;
@@ -15,12 +19,14 @@ export type SessionUser = {
 export type PageSummary = {
   id: string;
   title: string;
+  createdAt: number;
+  createdByName: string;
+  excerpt: string;
   updatedAt: number;
 };
 
 export type PageRecord = PageSummary & {
   markdown: string;
-  createdAt: number;
   createdBy: string;
 };
 
@@ -38,4 +44,5 @@ export type SearchResult = {
   id: string;
   title: string;
   excerpt: string;
+  updatedAt: number;
 };
