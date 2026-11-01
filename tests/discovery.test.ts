@@ -239,6 +239,7 @@ function pageSummary(id: string): PageSummary {
     updatedByName: '',
     excerpt: '',
     updatedAt: 0,
+    parentId: null,
   };
 }
 

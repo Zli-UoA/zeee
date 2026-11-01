@@ -11,6 +11,7 @@ import {
 import {
   type DeletedPageSummary,
   type LinkTarget,
+  type PageBreadcrumb,
   type PageRecord,
   type PageNavigation,
   type PageSlice,
@@ -24,6 +25,7 @@ import {
 
 const EXCERPT_LENGTH = 180;
 const EXCERPT_SOURCE_LENGTH = 1000;
+export const MAX_PAGE_DEPTH = 32;
 
 const UPSERT_PAGE_ALIAS = `INSERT INTO page_alias (alias, page_id, created_at) VALUES (?, ?, ?)
   ON CONFLICT(alias) DO UPDATE SET page_id = excluded.page_id, created_at = excluded.created_at`;
@@ -42,6 +44,7 @@ type PageRow = {
   created_by: string;
   created_at: number;
   updated_at: number;
+  parent_id: string | null;
 };
 
 type PageSummaryRow = {
@@ -49,6 +52,7 @@ type PageSummaryRow = {
   title: string;
   created_at: number;
   updated_at: number;
+  parent_id: string | null;
   created_by_name: string | null;
   updated_by: string | null;
   updated_by_name: string | null;
@@ -211,7 +215,7 @@ export async function consumeLoginFlow(
   return { nonce: row.nonce, codeVerifier: row.code_verifier, returnTo: row.return_to };
 }
 
-const SUMMARY_COLUMNS = `p.id, p.title, p.created_at, p.updated_at,
+const SUMMARY_COLUMNS = `p.id, p.title, p.created_at, p.updated_at, p.parent_id,
   u.display_name AS created_by_name, e.author_id AS updated_by, editor.display_name AS updated_by_name,
   substr(COALESCE(b.markdown, ''), 1, ${EXCERPT_SOURCE_LENGTH}) AS excerpt_source`;
 const EDITOR_JOINS = `LEFT JOIN page_last_editor e ON e.page_id = p.id
@@ -224,10 +228,15 @@ const SUMMARY_JOINS = `LEFT JOIN app_user u ON u.id = p.created_by
 export async function listPageNavigation(db: D1Database): Promise<PageNavigation[]> {
   await ensureSchema(db);
   const result = await db
-    .prepare(`SELECT id, title, updated_at FROM page
+    .prepare(`SELECT id, title, parent_id, updated_at FROM page
     WHERE deleted_at IS NULL ORDER BY updated_at DESC, created_at DESC, id ASC`)
-    .all<{ id: string; title: string; updated_at: number }>();
-  return result.results.map((row) => ({ id: row.id, title: row.title, updatedAt: row.updated_at }));
+    .all<{ id: string; title: string; parent_id: string | null; updated_at: number }>();
+  return result.results.map((row) => ({
+    id: row.id,
+    title: row.title,
+    parentId: row.parent_id ?? null,
+    updatedAt: row.updated_at,
+  }));
 }
 
 export async function listPages(
@@ -435,6 +444,7 @@ function toPageSummary(row: PageSummaryRow): PageSummary {
     updatedByName: row.updated_by_name ?? '',
     excerpt: excerptFromMarkdown(row.excerpt_source ?? ''),
     updatedAt: row.updated_at,
+    parentId: row.parent_id ?? null,
   };
 }
 
@@ -449,7 +459,7 @@ export async function getPage(db: D1Database, pageId: string): Promise<PageRecor
   await ensureSchema(db);
   const row = await db
     .prepare(
-      `SELECT p.id, p.title, p.created_by, p.created_at, p.updated_at,
+      `SELECT p.id, p.title, p.created_by, p.created_at, p.updated_at, p.parent_id,
               u.display_name AS created_by_name, e.author_id AS updated_by, editor.display_name AS updated_by_name,
               COALESCE(b.markdown, '') AS markdown
        FROM page p
@@ -471,6 +481,7 @@ export async function getPage(db: D1Database, pageId: string): Promise<PageRecor
     createdAt: row.created_at,
     excerpt: excerptFromMarkdown(row.markdown),
     updatedAt: row.updated_at,
+    parentId: row.parent_id ?? null,
     markdown: row.markdown,
   };
 }
@@ -479,6 +490,7 @@ export async function createPage(
   db: D1Database,
   title: string,
   userId: string,
+  parentId: string | null = null,
 ): Promise<PageSummary> {
   await ensureSchema(db);
   const id = uuid();
@@ -490,9 +502,9 @@ export async function createPage(
   await db.batch([
     db
       .prepare(
-        'INSERT INTO page (id, title, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?)',
+        'INSERT INTO page (id, title, created_by, created_at, updated_at, parent_id) VALUES (?, ?, ?, ?, ?, ?)',
       )
-      .bind(id, title, userId, timestamp, timestamp),
+      .bind(id, title, userId, timestamp, timestamp, parentId),
     db
       .prepare('INSERT INTO page_body (page_id, markdown, updated_at) VALUES (?, ?, ?)')
       .bind(id, '', timestamp),
@@ -509,6 +521,7 @@ export async function createPage(
     updatedByName: author?.display_name ?? '',
     excerpt: '',
     updatedAt: timestamp,
+    parentId,
   };
 }
 
@@ -550,8 +563,93 @@ export async function updatePageTitle(
   await db.batch(statements);
 }
 
-export async function softDeletePage(db: D1Database, pageId: string): Promise<void> {
+export async function updatePageParent(
+  db: D1Database,
+  pageId: string,
+  parentId: string | null,
+): Promise<void> {
   await ensureSchema(db);
+  await db.prepare('UPDATE page SET parent_id = ? WHERE id = ?').bind(parentId, pageId).run();
+}
+
+export async function countLiveChildren(db: D1Database, pageId: string): Promise<number> {
+  await ensureSchema(db);
+  const row = await db
+    .prepare('SELECT COUNT(*) AS count FROM page WHERE parent_id = ? AND deleted_at IS NULL')
+    .bind(pageId)
+    .first<{ count: number }>();
+  return Number(row?.count ?? 0);
+}
+
+export async function getPageAncestors(db: D1Database, pageId: string): Promise<PageBreadcrumb[]> {
+  await ensureSchema(db);
+  const result = await db
+    .prepare(
+      `WITH RECURSIVE ancestors(id, title, parent_id, depth) AS (
+         SELECT p.id, p.title, p.parent_id, 1
+         FROM page p JOIN page child ON child.parent_id = p.id
+         WHERE child.id = ? AND p.deleted_at IS NULL
+         UNION ALL
+         SELECT p.id, p.title, p.parent_id, a.depth + 1
+         FROM page p JOIN ancestors a ON p.id = a.parent_id
+         WHERE p.deleted_at IS NULL AND a.depth < ?
+       )
+       SELECT id, title FROM ancestors ORDER BY depth DESC`,
+    )
+    .bind(pageId, MAX_PAGE_DEPTH)
+    .all<{ id: string; title: string }>();
+  return (result.results ?? []).map((row) => ({ id: row.id, title: row.title }));
+}
+
+export async function hasAncestor(
+  db: D1Database,
+  pageId: string,
+  ancestorId: string,
+): Promise<boolean> {
+  await ensureSchema(db);
+  const row = await db
+    .prepare(
+      `WITH RECURSIVE chain(id, parent_id, depth) AS (
+         SELECT id, parent_id, 0 FROM page WHERE id = ?
+         UNION ALL
+         SELECT p.id, p.parent_id, c.depth + 1
+         FROM page p JOIN chain c ON p.id = c.parent_id
+         WHERE c.depth < ?
+       )
+       SELECT 1 AS found FROM chain WHERE id = ? LIMIT 1`,
+    )
+    .bind(pageId, MAX_PAGE_DEPTH, ancestorId)
+    .first<{ found: number }>();
+  return Boolean(row);
+}
+
+export async function maxSubtreeDepth(db: D1Database, pageId: string): Promise<number> {
+  await ensureSchema(db);
+  const row = await db
+    .prepare(
+      `WITH RECURSIVE descendants(id, depth) AS (
+         SELECT id, 0 FROM page WHERE id = ?
+         UNION ALL
+         SELECT p.id, d.depth + 1
+         FROM page p JOIN descendants d ON p.parent_id = d.id
+         WHERE d.depth < ?
+       )
+       SELECT MAX(depth) AS depth FROM descendants`,
+    )
+    .bind(pageId, MAX_PAGE_DEPTH + 1)
+    .first<{ depth: number | null }>();
+  return Number(row?.depth ?? 0);
+}
+
+export type SoftDeleteResult = {
+  deleted: boolean;
+  childCount: number;
+};
+
+export async function softDeletePage(db: D1Database, pageId: string): Promise<SoftDeleteResult> {
+  await ensureSchema(db);
+  const childCount = await countLiveChildren(db, pageId);
+  if (childCount > 0) return { deleted: false, childCount };
   const timestamp = Date.now();
   await db.batch([
     db
@@ -559,9 +657,15 @@ export async function softDeletePage(db: D1Database, pageId: string): Promise<vo
       .bind(timestamp, timestamp, pageId),
     db.prepare('DELETE FROM page_fts WHERE page_id = ?').bind(pageId),
   ]);
+  return { deleted: true, childCount: 0 };
 }
 
-export async function undeletePage(db: D1Database, pageId: string): Promise<boolean> {
+export type RestorePageResult = {
+  restored: boolean;
+  reparentedToRoot: boolean;
+};
+
+export async function restorePage(db: D1Database, pageId: string): Promise<RestorePageResult> {
   await ensureSchema(db);
   const timestamp = Date.now();
   const results = await db.batch([
@@ -570,6 +674,15 @@ export async function undeletePage(db: D1Database, pageId: string): Promise<bool
         'UPDATE page SET deleted_at = NULL, updated_at = ? WHERE id = ? AND deleted_at IS NOT NULL',
       )
       .bind(timestamp, pageId),
+    db
+      .prepare(
+        `UPDATE page SET parent_id = NULL
+         WHERE id = ? AND deleted_at IS NULL AND parent_id IS NOT NULL
+         AND NOT EXISTS (
+           SELECT 1 FROM page parent WHERE parent.id = page.parent_id AND parent.deleted_at IS NULL
+         )`,
+      )
+      .bind(pageId),
     db
       .prepare(
         `DELETE FROM page_fts WHERE page_id = ?
@@ -585,7 +698,14 @@ export async function undeletePage(db: D1Database, pageId: string): Promise<bool
       )
       .bind(pageId, timestamp),
   ]);
-  return (results[0]?.meta.changes ?? 0) > 0;
+  return {
+    restored: (results[0]?.meta.changes ?? 0) > 0,
+    reparentedToRoot: (results[1]?.meta.changes ?? 0) > 0,
+  };
+}
+
+export async function undeletePage(db: D1Database, pageId: string): Promise<boolean> {
+  return (await restorePage(db, pageId)).restored;
 }
 
 export async function permanentlyDeletePage(db: D1Database, pageId: string): Promise<boolean> {

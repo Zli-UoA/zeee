@@ -60,6 +60,21 @@ R2 secrets が未設定のままデプロイすると、deploy は skip され�
 - `celld deploy` の失敗: R2 の credential / bucket / endpoint と celld の状態を確認する
 - health check の失敗: 30 回のリトライ後も `/api/health` が通らない場合、デプロイは失敗扱い。celld / ingress / tunnel の状態を確認する
 
+## D1 の additive migration
+
+`src/server/schema.ts` は基礎スキーマの後に `0001_scale`、`0002_directory` の順で適用する。各 migration の SQL と `meta['migration:...']` の marker は同じ D1 `batch` に入るため、失敗時は marker ごと rollback され、次回リクエストで再試行される。
+
+`0002_directory` は `page.parent_id` と `page_parent_idx` を追加する。SQLite には `ADD COLUMN IF NOT EXISTS` がないため、runner は `PRAGMA table_info(page)` で `parent_id` の有無を確認し、未追加のときだけ `ALTER TABLE` を含める。`0002_directory.sql` を Wrangler で単体再適用しない（アプリの `meta` marker と Wrangler の migration 管理表は別物）。
+
+本番適用時は次を守る。
+
+1. 適用前に D1 のバックアップ（Time Travel の bookmark または export）を取得する。
+2. 新しい Worker をデプロイし、初回リクエストで `0002_directory` を自動適用する。
+3. `meta['migration:0002_directory']`、`PRAGMA table_info(page)`、`page_parent_idx` を確認する。
+4. 既存ページがすべて `parent_id IS NULL` のままであることを確認する。
+
+`ON DELETE SET NULL` は `PRAGMA foreign_keys` が有効な接続でだけ動く。D1 / celld の本番挙動は spike で確認する。
+
 ## ロールバック
 
 `workflow_dispatch` の `ref` に戻したい commit SHA を指定して再デプロイする。

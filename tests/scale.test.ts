@@ -87,6 +87,7 @@ describe('keyset page lists', () => {
           updatedBy: null,
           updatedByName: '',
           excerpt: '',
+          parentId: null,
         }));
       const pages = await allPages(db, sort);
       expect(pages.map((p) => p.id)).toEqual(sortPageSummaries(expected, sort).map((p) => p.id));
@@ -115,7 +116,7 @@ describe('keyset page lists', () => {
     const first = await listPages(db, { limit: 4 });
     await softDeletePage(db, first.items[3].id);
     sqlite
-      .prepare('INSERT INTO page VALUES (?,?,?,?,?,NULL)')
+      .prepare('INSERT INTO page (id,title,created_by,created_at,updated_at) VALUES (?,?,?,?,?)')
       .run('new', 'New', 'creator', 1000, 1000);
     const second = await listPages(db, { limit: 20, cursor: first.nextCursor });
     expect(second.items).toHaveLength(8);

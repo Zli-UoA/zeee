@@ -1,3 +1,4 @@
+import directoryMigration from '../../migrations/0002_directory.sql?raw';
 import scaleMigration from '../../migrations/0001_scale.sql?raw';
 
 const SCHEMA = `
@@ -107,12 +108,23 @@ async function createSchema(db: D1Database): Promise<void> {
     .first();
   if (!migrated) {
     // D1 batch is transactional: the marker is committed with the complete migration.
+    await db.batch(migrationStatements(db, scaleMigration));
+  }
+
+  const directoryMigrated = await db
+    .prepare("SELECT value FROM meta WHERE key = 'migration:0002_directory'")
+    .first();
+  if (!directoryMigrated) {
+    const columns = await db.prepare('PRAGMA table_info(page)').all<{ name: string }>();
+    const hasParentId = (columns.results ?? []).some((column) => column.name === 'parent_id');
+    // SQLite has no ADD COLUMN IF NOT EXISTS. Skip the ALTER when a previous
+    // manual application added the column but did not write the marker.
     await db.batch(
-      scaleMigration
-        .split(';')
-        .map((sql) => sql.trim())
-        .filter(Boolean)
-        .map((sql) => db.prepare(sql)),
+      migrationStatements(
+        db,
+        directoryMigration,
+        (sql) => !(hasParentId && /\bALTER\s+TABLE\s+page\s+ADD\s+COLUMN\s+parent_id\b/i.test(sql)),
+      ),
     );
   }
 
@@ -125,4 +137,17 @@ async function createSchema(db: D1Database): Promise<void> {
       'CREATE VIRTUAL TABLE IF NOT EXISTS page_fts USING fts5(page_id UNINDEXED, title, body)',
     );
   }
+}
+
+function migrationStatements(
+  db: D1Database,
+  migration: string,
+  include: (sql: string) => boolean = () => true,
+): D1PreparedStatement[] {
+  return migration
+    .split(';')
+    .map((sql) => sql.trim())
+    .filter(Boolean)
+    .filter(include)
+    .map((sql) => db.prepare(sql));
 }

@@ -41,7 +41,10 @@ function database(handler: (sql: string, args: unknown[]) => QueryResult): D1Dat
         } as unknown as D1Result<T>;
       },
       async first<T>() {
-        if (sql.includes("FROM meta WHERE key = 'migration:0001_scale'"))
+        if (
+          sql.includes("FROM meta WHERE key = 'migration:0001_scale'") ||
+          sql.includes("FROM meta WHERE key = 'migration:0002_directory'")
+        )
           return { value: '1' } as T;
         return (handler(sql, args).first ?? null) as T | null;
       },
@@ -80,6 +83,7 @@ function pageSummary(id: string, title: string, createdAt: number, updatedAt: nu
     updatedByName: '',
     excerpt: '',
     updatedAt,
+    parentId: null,
   };
 }
 
@@ -267,6 +271,7 @@ describe('listDeletedPages', () => {
         updatedByName: '',
         excerpt: '見出し 本文です。',
         updatedAt: 300,
+        parentId: null,
         deletedAt: 400,
       },
       {
@@ -278,6 +283,7 @@ describe('listDeletedPages', () => {
         updatedByName: '',
         excerpt: '',
         updatedAt: 150,
+        parentId: null,
         deletedAt: 200,
       },
     ]);
@@ -294,12 +300,15 @@ describe('undeletePage', () => {
 
     await expect(undeletePage(db, 'page-1')).resolves.toBe(true);
 
-    expect(statements).toHaveLength(3);
-    const [update, clearFts, rebuildFts] = statements;
+    expect(statements).toHaveLength(4);
+    const [update, reparent, clearFts, rebuildFts] = statements;
     expect(normalizeSql(update.sql)).toBe(
       'UPDATE page SET deleted_at = NULL, updated_at = ? WHERE id = ? AND deleted_at IS NOT NULL',
     );
     expect(update.args).toEqual([expect.any(Number), 'page-1']);
+
+    expect(normalizeSql(reparent.sql)).toContain('UPDATE page SET parent_id = NULL');
+    expect(reparent.args).toEqual(['page-1']);
 
     expect(normalizeSql(clearFts.sql)).toBe(
       'DELETE FROM page_fts WHERE page_id = ? AND EXISTS (SELECT 1 FROM page WHERE id = ? AND deleted_at IS NULL AND updated_at = ?)',
@@ -320,7 +329,7 @@ describe('undeletePage', () => {
     });
 
     await expect(undeletePage(db, 'missing')).resolves.toBe(false);
-    expect(statements).toHaveLength(3);
+    expect(statements).toHaveLength(4);
     expect(statements[0].sql).toContain('AND deleted_at IS NOT NULL');
   });
 });

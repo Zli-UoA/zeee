@@ -1,6 +1,6 @@
 import { defineHandler } from 'void';
 import { getSessionUser } from '../../../../src/server/auth';
-import { recordAudit, undeletePage } from '../../../../src/server/db';
+import { recordAudit, restorePage } from '../../../../src/server/db';
 import { jsonError, pathParam, sameOrigin } from '../../../../src/server/http';
 import type { Env } from '../../../../src/server/types';
 
@@ -11,8 +11,8 @@ export const POST = defineHandler(async (c) => {
 
   const env = c.env as Env;
   const pageId = pathParam(c, 'id');
-  const restored = await undeletePage(env.DB, pageId);
-  if (!restored) return jsonError(c, 404, 'deleted page not found');
+  const result = await restorePage(env.DB, pageId);
+  if (!result.restored) return jsonError(c, 404, 'deleted page not found');
   await recordAudit(env.DB, user.id, 'page.undelete', 'page', pageId);
-  return { ok: true };
+  return { ok: true, reparentedToRoot: result.reparentedToRoot };
 });

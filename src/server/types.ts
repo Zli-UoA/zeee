@@ -24,8 +24,16 @@ export type LinkTarget = {
 export type PageNavigation = {
   id: string;
   title: string;
+  parentId: string | null;
   updatedAt: number;
 };
+
+export type PageBreadcrumb = {
+  id: string;
+  title: string;
+};
+
+export type PageTreeNode = PageNavigation;
 
 export type PageSlice<T> = {
   items: T[];
@@ -47,6 +55,7 @@ export type PageSummary = {
   updatedByName: string;
   excerpt: string;
   updatedAt: number;
+  parentId: string | null;
 };
 
 export type PageRecord = PageSummary & {
