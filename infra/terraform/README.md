@@ -5,6 +5,8 @@ zeee が使う Cloudflare R2 バケットを OpenTofu でコード管理しま�
 ## 管理対象リソース
 
 - `zeee-fleet`（Location: `APAC`、Storage class: `Standard`）
+- `zeee-fleet` の lifecycle ルール `Default Multipart Abort Rule`（完了しなかったマルチパートアップロードを 7 日で破棄。R2 がバケット作成時に付けた既定のルールをそのまま管理します）
+- CORS は設定しません（2026-11-01 時点で未設定）。
 
 `zeee-fleet` は celld の fleet バケットです。zoo2-infra の `kubernetes/apps/zeee/runtime/` にある celld StatefulSet が `CELLD_DURABILITY=bucket` で書き込む先で、zeee の永続データはこのバケットにしかありません。
 デプロイ（`.github/workflows/deploy.yml`）も同じバケットに成果物を置きます。
@@ -92,7 +94,7 @@ tofu apply
 provider v5 の import ID は `<account_id>/<bucket_name>/<jurisdiction>` で、jurisdiction は `default` です。
 
 1. 下の GitHub Secrets を登録します。
-2. PR の plan コメント（または手元の `tofu plan`）が `1 to import, 0 to add, 0 to change, 0 to destroy` になることを確認します。
+2. PR の plan コメント（または手元の `tofu plan`）が `1 to import, 1 to add, 0 to change, 0 to destroy` になることを確認します。add は lifecycle のルールで、今と同じ内容で上書きします。
    変更や再作成が出たらマージせず、`r2.tf` を実際の設定に合わせます（`location` は大文字の `APAC` で一致します）。
 3. マージすると CI が apply し、state に取り込みます。Actions の Apply ジョブが成功したことを確認します。
 4. 次に `infra/terraform/` を変更する PR の plan コメント（または手元の `tofu plan`）が `No changes.` になれば完了です。

@@ -25,3 +25,27 @@ resource "cloudflare_r2_bucket" "fleet" {
     prevent_destroy = true
   }
 }
+
+# R2 がバケット作成時に付けた既定のルール（2026-11-01 時点の設定）をそのまま管理します。
+# 完了しなかったマルチパートアップロードを 7 日で破棄するだけで、オブジェクトは消しません。
+# provider v5 は lifecycle の import に対応していないため、初回の apply では同じ内容で作成（上書き）します。
+resource "cloudflare_r2_bucket_lifecycle" "fleet" {
+  account_id  = var.cloudflare_account_id
+  bucket_name = cloudflare_r2_bucket.fleet.name
+
+  rules = [
+    {
+      id      = "Default Multipart Abort Rule"
+      enabled = true
+      conditions = {
+        prefix = ""
+      }
+      abort_multipart_uploads_transition = {
+        condition = {
+          max_age = 604800
+          type    = "Age"
+        }
+      }
+    }
+  ]
+}
