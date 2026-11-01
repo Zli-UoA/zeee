@@ -3,14 +3,14 @@ name: Terraform R2
 on:
   pull_request:
     paths:
-      - "infra/terraform/**"
-      - ".github/workflows/terraform-r2.yaml"
+      - 'infra/terraform/**'
+      - '.github/workflows/terraform-r2.yaml'
   push:
     branches:
       - main
     paths:
-      - "infra/terraform/**"
-      - ".github/workflows/terraform-r2.yaml"
+      - 'infra/terraform/**'
+      - '.github/workflows/terraform-r2.yaml'
   workflow_dispatch:
 
 permissions:

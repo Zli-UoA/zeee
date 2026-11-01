@@ -17,24 +17,24 @@ zeee が使う Cloudflare R2 バケットを OpenTofu でコード管理しま�
 
 ## State
 
-| 項目 | 値 |
-| --- | --- |
+| 項目     | 値                                                                       |
+| -------- | ------------------------------------------------------------------------ |
 | バケット | `zoo-terraform-state`（Zli-UoA の共有 state バケット。この構成の管理外） |
-| key | `zeee/r2.tfstate` |
-| endpoint | `https://c9918f2caa050736a07867e6f968c0a2.r2.cloudflarestorage.com` |
-| ロック | `use_lockfile = true`（同じバケットに `.tflock` を置く） |
-| 暗号化 | pbkdf2 + AES-GCM。state と plan の両方で必須（`enforced = true`） |
+| key      | `zeee/r2.tfstate`                                                        |
+| endpoint | `https://c9918f2caa050736a07867e6f968c0a2.r2.cloudflarestorage.com`      |
+| ロック   | `use_lockfile = true`（同じバケットに `.tflock` を置く）                 |
+| 暗号化   | pbkdf2 + AES-GCM。state と plan の両方で必須（`enforced = true`）        |
 
 暗号化の passphrase は [`state-passphrase.sops.yaml`](state-passphrase.sops.yaml) に sops + age で暗号化して置いています。zoo2 や zoo2-infra とは別の値です。
 passphrase を失うと state を復号できなくなります。値を変える場合は OpenTofu の `fallback` を使って state を再暗号化してから差し替えます。
 
 ## 必要な環境変数
 
-| 変数 | 内容 |
-| --- | --- |
-| `TF_VAR_cloudflare_api_token` | Cloudflare API トークン（`Account` > `Workers R2 Storage` > `Edit`） |
-| `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | `zoo-terraform-state` を読み書きできる R2 の S3 API トークン |
-| `TF_VAR_state_passphrase` | state の暗号化 passphrase（下記の手順で sops から取り出す） |
+| 変数                                          | 内容                                                                 |
+| --------------------------------------------- | -------------------------------------------------------------------- |
+| `TF_VAR_cloudflare_api_token`                 | Cloudflare API トークン（`Account` > `Workers R2 Storage` > `Edit`） |
+| `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | `zoo-terraform-state` を読み書きできる R2 の S3 API トークン         |
+| `TF_VAR_state_passphrase`                     | state の暗号化 passphrase（下記の手順で sops から取り出す）          |
 
 `TF_VAR_cloudflare_account_id` は既定値（`c9918f2caa050736a07867e6f968c0a2`）があるので不要です。
 
@@ -106,8 +106,8 @@ provider v5 の import ID は `<account_id>/<bucket_name>/<jurisdiction>` で、
 - `infra/terraform/**` の変更時: `tofu fmt -check`、`tofu init -backend=false`、`tofu validate`
 - 下記 Secrets がすべてあるときだけ: backend 付きの `tofu plan`（fork PR などでは skip）
 
-| Secret | 内容 |
-| --- | --- |
-| `CLOUDFLARE_API_TOKEN` | Cloudflare API トークン |
-| `TF_STATE_AWS_ACCESS_KEY_ID` / `TF_STATE_AWS_SECRET_ACCESS_KEY` | state バケット用の R2 S3 API トークン |
-| `TF_STATE_PASSPHRASE` | `state-passphrase.sops.yaml` の `passphrase` |
+| Secret                                                          | 内容                                         |
+| --------------------------------------------------------------- | -------------------------------------------- |
+| `CLOUDFLARE_API_TOKEN`                                          | Cloudflare API トークン                      |
+| `TF_STATE_AWS_ACCESS_KEY_ID` / `TF_STATE_AWS_SECRET_ACCESS_KEY` | state バケット用の R2 S3 API トークン        |
+| `TF_STATE_PASSPHRASE`                                           | `state-passphrase.sops.yaml` の `passphrase` |
