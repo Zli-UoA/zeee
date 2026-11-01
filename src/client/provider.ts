@@ -1,6 +1,8 @@
 import * as Y from 'yjs';
 import { Awareness, applyAwarenessUpdate, encodeAwarenessUpdate } from 'y-protocols/awareness';
 import { decodeBase64, encodeBase64 } from '../shared/base64';
+import { containsUpdate } from '../shared/yjs';
+import { PendingUpdateStore, type StoredUpdate } from './persistence';
 
 export type ConnectionStatus = 'connecting' | 'connected' | 'reconnecting';
 
@@ -28,6 +30,15 @@ type ServerMessage = {
   clientSeq?: number;
 };
 
+type PendingUpdate = {
+  stored: StoredUpdate;
+  state?: Uint8Array;
+  durable: boolean;
+  acknowledged: boolean;
+  busy: boolean;
+  failed: boolean;
+};
+
 export class ZeeeProvider {
   private socket: WebSocket | null = null;
   private closed = false;
@@ -35,9 +46,17 @@ export class ZeeeProvider {
   private reconnectDelay = 500;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private pingTimer: ReturnType<typeof setInterval> | null = null;
-  private pending = new Map<number, string>();
+  private pending = new Map<number, PendingUpdate>();
   private nextClientSeq = 1;
-  private failed = false;
+  private readonly store: PendingUpdateStore;
+  private readonly sessionId = crypto.randomUUID();
+  private remoteDoc = new Y.Doc();
+  private readonly sent = new Set<number>();
+  private synced = false;
+  private initialized = false;
+  private initializing = false;
+  private initializationFailed = false;
+  readonly ready: Promise<void>;
   private readonly updateHandler: (update: Uint8Array, origin: unknown) => void;
   private readonly awarenessHandler: (change: AwarenessChange) => void;
 
@@ -45,11 +64,13 @@ export class ZeeeProvider {
     private readonly pageId: string,
     private readonly doc: Y.Doc,
     private readonly awareness: Awareness,
-    seed: boolean,
+    private readonly seed: boolean | string,
     private readonly onStatus: (status: ConnectionStatus) => void,
     private readonly onUsers: (users: Collaborator[]) => void,
     private readonly onSaveStatus: (status: SaveStatus) => void,
+    private readonly userId: string,
   ) {
+    this.store = new PendingUpdateStore(userId, pageId);
     this.updateHandler = (update, origin) => {
       if (origin === 'remote') return;
       this.queueUpdate(update);
@@ -62,8 +83,44 @@ export class ZeeeProvider {
 
     doc.on('update', this.updateHandler);
     awareness.on('update', this.awarenessHandler);
-    if (seed) this.queueUpdate(Y.encodeStateAsUpdate(doc));
-    this.connect();
+    this.ready = this.initialize();
+  }
+
+  private async initialize(): Promise<void> {
+    if (this.initializing || this.closed) return;
+    this.initializing = true;
+    try {
+      const restored = await this.store.load();
+      if (this.closed) return;
+      for (const state of restored.states) Y.applyUpdate(this.doc, state, 'remote');
+      for (const stored of restored.updates) {
+        Y.applyUpdate(this.doc, decodeBase64(stored.update), 'remote');
+        this.pending.set(this.nextClientSeq++, {
+          stored,
+          durable: true,
+          acknowledged: false,
+          busy: false,
+          failed: false,
+        });
+      }
+      this.initialized = true;
+      this.initializationFailed = false;
+      if (this.seed === true) this.queueUpdate(Y.encodeStateAsUpdate(this.doc));
+      else if (
+        this.seed &&
+        restored.updates.length === 0 &&
+        Y.decodeStateVector(Y.encodeStateVector(this.doc)).size === 0
+      ) {
+        this.doc.getText('markdown').insert(0, this.seed);
+      }
+      for (const [seq, entry] of this.pending) this.persist(seq, entry);
+      this.connect();
+    } catch {
+      this.initializationFailed = true;
+      this.notifySaveStatus();
+    } finally {
+      this.initializing = false;
+    }
   }
 
   private connect(): void {
@@ -76,13 +133,17 @@ export class ZeeeProvider {
     url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
     const socket = new WebSocket(url);
     this.socket = socket;
+    this.synced = false;
+    this.sent.clear();
+    // Each connection starts with the server's full, durable sync snapshot.
+    this.remoteDoc.destroy();
+    this.remoteDoc = new Y.Doc();
 
     socket.addEventListener('open', () => {
       if (this.socket !== socket) return;
       this.reconnectDelay = 500;
       this.connection = 'connected';
       this.onStatus('connected');
-      for (const [clientSeq, update] of this.pending) this.transmit(clientSeq, update);
       this.notifySaveStatus();
       this.send({
         type: 'sync',
@@ -108,20 +169,32 @@ export class ZeeeProvider {
       }
       if (message.type === 'ack') {
         if (typeof message.clientSeq !== 'number') return;
-        if (!this.pending.delete(message.clientSeq)) return;
-        if (this.pending.size === 0) this.failed = false;
-        this.notifySaveStatus();
+        const entry = this.pending.get(message.clientSeq);
+        if (entry && this.sent.has(message.clientSeq)) this.acknowledge(message.clientSeq, entry);
         return;
       }
       if (message.type === 'nack') {
         if (typeof message.clientSeq !== 'number' || !this.pending.has(message.clientSeq)) return;
-        this.failed = true;
+        this.pending.get(message.clientSeq)!.failed = true;
+        this.sent.delete(message.clientSeq);
         this.notifySaveStatus();
         return;
       }
       if (message.type === 'sync' || message.type === 'update') {
         if (!message.update) return;
-        Y.applyUpdate(this.doc, decodeBase64(message.update), 'remote');
+        const update = decodeBase64(message.update);
+        Y.applyUpdate(this.remoteDoc, update);
+        Y.applyUpdate(this.doc, update, 'remote');
+        if (message.type === 'sync') this.synced = true;
+        if (this.synced) {
+          for (const [seq, entry] of this.pending) {
+            if (containsUpdate(this.remoteDoc, decodeBase64(entry.stored.update))) {
+              this.acknowledge(seq, entry);
+            } else {
+              this.transmit(seq, entry);
+            }
+          }
+        }
         return;
       }
       if (message.type === 'awareness' && message.update) {
@@ -152,9 +225,16 @@ export class ZeeeProvider {
   }
 
   retry(): void {
-    this.failed = false;
+    if (!this.initialized) {
+      void this.initialize();
+      return;
+    }
+    for (const [seq, entry] of this.pending) {
+      entry.failed = false;
+      if (entry.acknowledged) this.acknowledge(seq, entry);
+      else this.persist(seq, entry);
+    }
     if (this.socket?.readyState === WebSocket.OPEN) {
-      for (const [clientSeq, update] of this.pending) this.transmit(clientSeq, update);
       this.notifySaveStatus();
       return;
     }
@@ -172,32 +252,114 @@ export class ZeeeProvider {
   private queueUpdate(update: Uint8Array): void {
     const clientSeq = this.nextClientSeq;
     this.nextClientSeq += 1;
-    const encoded = encodeBase64(update);
-    this.pending.set(clientSeq, encoded);
+    const entry: PendingUpdate = {
+      stored: {
+        id: crypto.randomUUID(),
+        sessionId: this.sessionId,
+        scope: [this.userId, this.pageId],
+        update: encodeBase64(update),
+      },
+      durable: false,
+      state: Y.encodeStateAsUpdate(this.doc),
+      acknowledged: false,
+      busy: false,
+      failed: false,
+    };
+    this.pending.set(clientSeq, entry);
     this.notifySaveStatus();
-    this.transmit(clientSeq, encoded);
+    if (this.initialized) this.persist(clientSeq, entry);
   }
 
-  private transmit(clientSeq: number, update: string): void {
+  private persist(clientSeq: number, entry: PendingUpdate): void {
+    if (entry.busy) return;
+    if (entry.durable) {
+      this.transmit(clientSeq, entry);
+      return;
+    }
+    // Commit local edits in order. A later checkpoint must never become durable
+    // while a dependency exists only in a failed/in-flight earlier outbox write.
+    for (const pending of this.pending.values()) {
+      if (pending === entry) break;
+      if (!pending.durable && !pending.acknowledged) return;
+    }
+    entry.busy = true;
+    void this.store
+      .put(entry.stored, entry.state!)
+      .then(() => {
+        entry.durable = true;
+        entry.state = undefined;
+        entry.busy = false;
+        if (entry.acknowledged) this.acknowledge(clientSeq, entry);
+        else this.transmit(clientSeq, entry);
+        this.persistNext();
+      })
+      .catch(() => {
+        entry.busy = false;
+        entry.failed = true;
+        this.notifySaveStatus();
+      });
+  }
+
+  private persistNext(): void {
+    for (const [seq, entry] of this.pending) {
+      if (!entry.durable && !entry.acknowledged) {
+        if (!entry.failed) this.persist(seq, entry);
+        break;
+      }
+    }
+  }
+
+  private acknowledge(clientSeq: number, entry: PendingUpdate): void {
+    entry.acknowledged = true;
+    if (entry.busy) return;
+    // A write may still be in flight when a sync proves an update is already durable remotely.
+    entry.busy = true;
+    void this.store
+      .remove(entry.stored)
+      .then(() => {
+        this.pending.delete(clientSeq);
+        this.sent.delete(clientSeq);
+        this.persistNext();
+        this.notifySaveStatus();
+      })
+      .catch(() => {
+        entry.busy = false;
+        entry.failed = true;
+        this.notifySaveStatus();
+      });
+  }
+
+  private transmit(clientSeq: number, entry: PendingUpdate): void {
     const socket = this.socket;
+    if (
+      this.closed ||
+      !this.synced ||
+      !entry.durable ||
+      entry.acknowledged ||
+      this.sent.has(clientSeq)
+    )
+      return;
     if (!socket || socket.readyState !== WebSocket.OPEN) return;
     try {
-      socket.send(JSON.stringify({ type: 'update', update, clientSeq }));
+      socket.send(JSON.stringify({ type: 'update', update: entry.stored.update, clientSeq }));
+      this.sent.add(clientSeq);
     } catch {
-      this.failed = true;
+      entry.failed = true;
       this.notifySaveStatus();
     }
   }
 
   private notifySaveStatus(): void {
+    if (this.closed) return;
     const pending = this.pending.size;
-    const state = this.failed
-      ? 'failed'
-      : pending > 0
-        ? this.connection === 'connected'
-          ? 'saving'
-          : 'unsent'
-        : 'saved';
+    const state =
+      this.initializationFailed || [...this.pending.values()].some((entry) => entry.failed)
+        ? 'failed'
+        : pending > 0
+          ? this.connection === 'connected'
+            ? 'saving'
+            : 'unsent'
+          : 'saved';
     this.onSaveStatus({ state, pending });
   }
 
@@ -227,5 +389,6 @@ export class ZeeeProvider {
     this.awareness.off('update', this.awarenessHandler);
     this.socket?.close();
     this.socket = null;
+    this.remoteDoc.destroy();
   }
 }

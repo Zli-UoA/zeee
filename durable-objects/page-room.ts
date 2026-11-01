@@ -4,6 +4,7 @@ import { defineDurableObject } from 'void/durable';
 import { createRevision, latestRevision, materializePage } from '../src/server/db';
 import type { Env } from '../src/server/types';
 import { decodeBase64, encodeBase64 } from '../src/shared/base64';
+import { containsUpdate } from '../src/shared/yjs';
 
 type ClientMessage =
   | { type: 'sync'; stateVector: string }
@@ -14,7 +15,7 @@ const TEN_MINUTES = 10 * 60 * 1000;
 const FIVE_MINUTES = 5 * 60 * 1000;
 const SNAPSHOT_UPDATES = 300;
 
-class PageRoomObject extends DurableObject<Env> {
+export class PageRoomObject extends DurableObject<Env> {
   private readonly doc = new Y.Doc();
   private readonly text = this.doc.getText('markdown');
   private readonly ready: Promise<void>;
@@ -140,10 +141,15 @@ class PageRoomObject extends DurableObject<Env> {
     const clientSeq = typeof parsed.clientSeq === 'number' ? parsed.clientSeq : undefined;
     try {
       const update = decodeBase64(parsed.update);
-      Y.applyUpdate(this.doc, update, 'remote');
-      this.lastActorId = parsed.actor ?? this.lastActorId;
-      this.saveUpdate(update, this.lastActorId);
-      this.broadcast({ type: 'update', update: parsed.update }, socket);
+      // Validate on a copy first. A failed SQL write must never appear in later syncs.
+      // Replays (including delete-only updates) need an ack, but no additional log row.
+      if (!containsUpdate(this.doc, update)) {
+        const actor = parsed.actor ?? this.lastActorId;
+        this.saveUpdate(update, actor);
+        Y.applyUpdate(this.doc, update, 'remote');
+        this.lastActorId = actor;
+        this.broadcast({ type: 'update', update: parsed.update }, socket);
+      }
       if (clientSeq !== undefined) this.reply(socket, { type: 'ack', clientSeq });
     } catch {
       if (clientSeq !== undefined) this.reply(socket, { type: 'nack', clientSeq });
@@ -230,14 +236,23 @@ class PageRoomObject extends DurableObject<Env> {
       return Response.json({ error: 'markdown is required' }, { status: 400 });
     }
 
-    const before = Y.encodeStateVector(this.doc);
-    this.doc.transact(() => {
-      this.text.delete(0, this.text.length);
-      this.text.insert(0, body.markdown as string);
-    });
-    const update = Y.encodeStateAsUpdate(this.doc, before);
-    this.lastActorId = userId;
+    const replacement = new Y.Doc();
+    let update: Uint8Array;
+    try {
+      Y.applyUpdate(replacement, Y.encodeStateAsUpdate(this.doc));
+      const text = replacement.getText('markdown');
+      const before = Y.encodeStateVector(replacement);
+      replacement.transact(() => {
+        text.delete(0, text.length);
+        text.insert(0, body.markdown as string);
+      });
+      update = Y.encodeStateAsUpdate(replacement, before);
+    } finally {
+      replacement.destroy();
+    }
     this.saveUpdate(update, userId);
+    Y.applyUpdate(this.doc, update, 'remote');
+    this.lastActorId = userId;
     this.broadcast({ type: 'update', update: encodeBase64(update) });
 
     await materializePage(this.env.DB, this.pageId, this.text.toJSON());
