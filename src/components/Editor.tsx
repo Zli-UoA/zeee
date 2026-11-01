@@ -1,16 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import * as Y from 'yjs';
-import { Awareness } from 'y-protocols/awareness';
-import {
-  autocompletion,
-  type CompletionResult,
-  type CompletionSource,
-} from '@codemirror/autocomplete';
-import { EditorView, basicSetup } from 'codemirror';
-import { Prec } from '@codemirror/state';
-import { keymap } from '@codemirror/view';
-import { markdown as markdownLanguage } from '@codemirror/lang-markdown';
-import { yCollab, yUndoManagerKeymap } from 'y-codemirror.next';
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
+import type * as Y from 'yjs';
+import type { Awareness } from 'y-protocols/awareness';
 import { useRouter } from '@void/react';
 import {
   Badge,
@@ -33,23 +23,19 @@ import {
   TrashIcon,
   XIcon,
 } from '@phosphor-icons/react';
-import {
-  ZeeeProvider,
-  type Collaborator,
-  type ConnectionStatus,
-  type SaveStatus,
-} from '../client/provider';
+import type { ZeeeProvider, Collaborator, ConnectionStatus, SaveStatus } from '../client/provider';
 import type { PageRecord, PageNavigation, RevisionRecord, SessionUser } from '../server/types';
-import {
-  filterWikiCompletions,
-  findWikiCompletionContext,
-  wikiCompletionText,
-  wikiCompletionTo,
-} from '../markdown/autocomplete';
 import type { LinkTarget } from '../markdown/wiki';
 import { formatDate } from '../shared/format';
-import { MarkdownView } from './MarkdownView';
 import { RevisionPreview } from './RevisionPreview';
+
+const CodeEditor = lazy(() => import('./CodeEditor'));
+const MarkdownView = lazy(() =>
+  import('./MarkdownView').then((module) => ({ default: module.MarkdownView })),
+);
+
+const editorClassName =
+  'min-h-[calc(60svh-3.5rem)] w-full max-w-[36.5rem] flex-1 lg:min-h-[calc(100vh-18rem-4.5rem)]';
 
 type Props = {
   page: PageRecord;
@@ -67,34 +53,8 @@ type Collaboration = {
 
 type Mode = 'read' | 'edit';
 
-const editorTheme = EditorView.theme({
-  '&': {
-    backgroundColor: 'transparent',
-    color: 'var(--text-color-kumo-default)',
-  },
-  '.cm-content': {
-    caretColor: 'var(--color-kumo-brand)',
-    fontFamily: 'ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace',
-    fontSize: '14px',
-    lineHeight: '1.9',
-  },
-  '.cm-line': {
-    padding: '0',
-  },
-  '.cm-gutters': {
-    display: 'none',
-  },
-  '.cm-activeLine': {
-    backgroundColor: 'color-mix(in oklab, var(--color-kumo-contrast) 4%, transparent)',
-  },
-  '.cm-selectionBackground, ::selection': {
-    backgroundColor: 'color-mix(in oklab, var(--color-kumo-brand) 22%, transparent) !important',
-  },
-});
-
 export function Editor({ page, user, revisions, pages, linkTargets }: Props) {
   const router = useRouter();
-  const editorRef = useRef<HTMLDivElement>(null);
   const historyRef = useRef<HTMLDivElement>(null);
   const renderTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const providerRef = useRef<ZeeeProvider | null>(null);
@@ -125,38 +85,52 @@ export function Editor({ page, user, revisions, pages, linkTargets }: Props) {
     let cancelled = false;
     let provider: ZeeeProvider | undefined;
     let observer: (() => void) | undefined;
-    const doc = new Y.Doc();
-    const text = doc.getText('markdown');
-    const awareness = new Awareness(doc);
-    const undoManager = new Y.UndoManager(text);
-    awareness.setLocalStateField('user', {
-      name: user.displayName,
-      color: colorFor(user.displayName),
-    });
+    let doc: Y.Doc | undefined;
+    let text: Y.Text | undefined;
+    let awareness: Awareness | undefined;
+    let undoManager: Y.UndoManager | undefined;
 
     void (async () => {
       try {
+        const [yjs, awarenessModule, providerModule] = await Promise.all([
+          import('yjs'),
+          import('y-protocols/awareness'),
+          import('../client/provider'),
+        ]);
+        if (cancelled) return;
+
+        const yDoc = new yjs.Doc();
+        const yText = yDoc.getText('markdown');
+        const localAwareness = new awarenessModule.Awareness(yDoc);
+        const localUndoManager = new yjs.UndoManager(yText);
+        doc = yDoc;
+        text = yText;
+        awareness = localAwareness;
+        undoManager = localUndoManager;
+
+        localAwareness.setLocalStateField('user', {
+          name: user.displayName,
+          color: colorFor(user.displayName),
+        });
+
         const response = await fetch(`/api/pages/${page.id}/state`).catch(() => null);
         if (response?.ok) {
-          Y.applyUpdate(doc, new Uint8Array(await response.arrayBuffer()));
+          yjs.applyUpdate(yDoc, new Uint8Array(await response.arrayBuffer()));
         }
-        if (cancelled) {
-          doc.destroy();
-          return;
-        }
-        undoManager.clear();
+        if (cancelled) return;
+        localUndoManager.clear();
 
-        setMarkdown(text.toJSON());
+        setMarkdown(yText.toJSON());
         observer = () => {
           if (renderTimerRef.current) clearTimeout(renderTimerRef.current);
-          renderTimerRef.current = setTimeout(() => setMarkdown(text.toJSON()), 120);
+          renderTimerRef.current = setTimeout(() => setMarkdown(yText.toJSON()), 120);
         };
-        text.observe(observer);
+        yText.observe(observer);
 
-        provider = new ZeeeProvider(
+        provider = new providerModule.ZeeeProvider(
           page.id,
-          doc,
-          awareness,
+          yDoc,
+          localAwareness,
           response?.ok ? page.markdown : false,
           setStatus,
           setUsers,
@@ -166,12 +140,12 @@ export function Editor({ page, user, revisions, pages, linkTargets }: Props) {
         providerRef.current = provider;
         await provider.ready;
         if (cancelled) return;
-        undoManager.clear();
-        setMarkdown(text.toJSON());
-        setCollaboration({ text, awareness, undoManager });
+        localUndoManager.clear();
+        setMarkdown(yText.toJSON());
+        setCollaboration({ text: yText, awareness: localAwareness, undoManager: localUndoManager });
       } catch (loadError) {
+        if (cancelled) return;
         setError(loadError instanceof Error ? loadError.message : '本文を読み込めませんでした');
-        doc.destroy();
       }
     })();
 
@@ -181,12 +155,12 @@ export function Editor({ page, user, revisions, pages, linkTargets }: Props) {
         clearTimeout(renderTimerRef.current);
         renderTimerRef.current = null;
       }
-      if (observer) text.unobserve(observer);
+      if (observer && text) text.unobserve(observer);
       provider?.destroy();
       providerRef.current = null;
-      undoManager.destroy();
-      awareness.destroy();
-      doc.destroy();
+      undoManager?.destroy();
+      awareness?.destroy();
+      doc?.destroy();
       setCollaboration(null);
     };
   }, [page.id, user.id]);
@@ -243,27 +217,6 @@ export function Editor({ page, user, revisions, pages, linkTargets }: Props) {
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [mode, collaboration, markdown, busy]);
-
-  useEffect(() => {
-    if (mode !== 'edit' || !collaboration || !editorRef.current) return;
-    const view = new EditorView({
-      doc: collaboration.text.toJSON(),
-      extensions: [
-        basicSetup,
-        Prec.high(keymap.of(yUndoManagerKeymap)),
-        markdownLanguage(),
-        autocompletion({ override: [wikiCompletionSource(targets)] }),
-        EditorView.lineWrapping,
-        EditorView.contentAttributes.of({ 'aria-label': '本文' }),
-        editorTheme,
-        yCollab(collaboration.text, collaboration.awareness, {
-          undoManager: collaboration.undoManager,
-        }),
-      ],
-      parent: editorRef.current,
-    });
-    return () => view.destroy();
-  }, [mode, collaboration, targets]);
 
   useEffect(() => {
     if (!historyOpen) return;
@@ -530,20 +483,38 @@ export function Editor({ page, user, revisions, pages, linkTargets }: Props) {
         ) : (
           <LayerCard className={mode === 'read' ? 'p-0' : 'overflow-hidden p-0'}>
             {mode === 'read' ? (
-              <MarkdownView
-                markdown={markdown}
-                pages={pages}
-                linkTargets={targets}
-                pageId={page.id}
-                pageTitle={savedTitle}
-                sidePanel={!historyOpen}
-              />
+              <Suspense
+                fallback={
+                  <div
+                    aria-busy="true"
+                    className="min-h-[60svh] px-5 py-7 sm:px-8 sm:py-9 lg:min-h-[calc(100vh-18rem)]"
+                  />
+                }
+              >
+                <MarkdownView
+                  markdown={markdown}
+                  pages={pages}
+                  linkTargets={targets}
+                  pageId={page.id}
+                  pageTitle={savedTitle}
+                  sidePanel={!historyOpen}
+                />
+              </Suspense>
             ) : (
               <div className="flex min-h-[60svh] flex-col px-5 py-7 sm:px-8 sm:py-9 lg:min-h-[calc(100vh-18rem)]">
-                <div
-                  className="min-h-[calc(60svh-3.5rem)] w-full max-w-[36.5rem] flex-1 lg:min-h-[calc(100vh-18rem-4.5rem)]"
-                  ref={editorRef}
-                />
+                <Suspense fallback={<div aria-busy="true" className={editorClassName} />}>
+                  {collaboration ? (
+                    <CodeEditor
+                      text={collaboration.text}
+                      awareness={collaboration.awareness}
+                      undoManager={collaboration.undoManager}
+                      targets={targets}
+                      className={editorClassName}
+                    />
+                  ) : (
+                    <div aria-busy="true" className={editorClassName} />
+                  )}
+                </Suspense>
               </div>
             )}
           </LayerCard>
@@ -782,34 +753,6 @@ function SaveStatusBadge({
       ) : null}
     </div>
   );
-}
-
-function wikiCompletionSource(targets: LinkTarget[]): CompletionSource {
-  return (context) => wikiCompletionResult(targets, context.state.doc.toString(), context.pos);
-}
-
-function wikiCompletionResult(
-  targets: LinkTarget[],
-  markdown: string,
-  pos: number,
-): CompletionResult | null {
-  const found = findWikiCompletionContext(markdown, pos);
-  if (!found) return null;
-  const candidates = filterWikiCompletions(targets, found.query);
-  if (candidates.length === 0) return null;
-  return {
-    from: found.from,
-    to: wikiCompletionTo(markdown, pos),
-    filter: false,
-    options: candidates.map((candidate) => ({
-      label: candidate.title,
-      type: 'text',
-      detail: candidate.matchedAlias ? `別名: ${candidate.matchedAlias}` : undefined,
-      apply: wikiCompletionText(candidate.title),
-    })),
-    update: (_current, _from, _to, context) =>
-      wikiCompletionResult(targets, context.state.doc.toString(), context.pos),
-  };
 }
 
 function colorFor(name: string): string {
