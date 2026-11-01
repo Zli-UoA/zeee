@@ -1,0 +1,174 @@
+name: Terraform R2
+
+# PR では plan の結果をコメントし、main へのマージで apply します（infra/terraform/README.md）。
+on:
+  pull_request:
+    paths:
+      - 'infra/terraform/**'
+      - '.github/workflows/terraform-r2.yaml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'infra/terraform/**'
+      - '.github/workflows/terraform-r2.yaml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# PR は新しい push で前の実行を取り消します。main では apply を途中で取り消さず、順番に実行します。
+concurrency:
+  group: terraform-r2-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+defaults:
+  run:
+    working-directory: infra/terraform
+
+env:
+  TOFU_VERSION: 1.11.14
+
+jobs:
+  validate:
+    name: Validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: opentofu/setup-opentofu@v2
+        with:
+          tofu_version: ${{ env.TOFU_VERSION }}
+          tofu_wrapper: false
+
+      - run: tofu fmt -check -recursive
+
+      - run: tofu init -backend=false -input=false
+
+      - run: tofu validate
+
+  plan:
+    name: Plan
+    needs: [validate]
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: write
+    env:
+      TF_VAR_cloudflare_api_token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.TF_STATE_AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.TF_STATE_AWS_SECRET_ACCESS_KEY }}
+      TF_VAR_state_passphrase: ${{ secrets.TF_STATE_PASSPHRASE }}
+    steps:
+      - name: Check secrets
+        id: secrets
+        working-directory: .
+        run: |
+          if [ -n "$TF_VAR_cloudflare_api_token" ] && [ -n "$AWS_ACCESS_KEY_ID" ] && [ -n "$AWS_SECRET_ACCESS_KEY" ] && [ -n "$TF_VAR_state_passphrase" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice title=Terraform secrets 未設定::CLOUDFLARE_API_TOKEN / TF_STATE_AWS_ACCESS_KEY_ID / TF_STATE_AWS_SECRET_ACCESS_KEY / TF_STATE_PASSPHRASE のいずれかが未設定（fork PR を含む）のため plan を skip します。"
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - if: steps.secrets.outputs.present == 'true'
+        uses: actions/checkout@v4
+
+      - if: steps.secrets.outputs.present == 'true'
+        uses: opentofu/setup-opentofu@v2
+        with:
+          tofu_version: ${{ env.TOFU_VERSION }}
+          tofu_wrapper: false
+
+      - if: steps.secrets.outputs.present == 'true'
+        run: tofu init -input=false
+
+      # plan は state を書き換えないので、ロックを取らず apply を待たせません。
+      - name: Plan
+        id: plan
+        if: steps.secrets.outputs.present == 'true'
+        run: |
+          set +e
+          tofu plan -input=false -no-color -lock=false -concise 2>&1 | tee "$RUNNER_TEMP/plan.txt"
+          code=${PIPESTATUS[0]}
+          echo "exitcode=$code" >> "$GITHUB_OUTPUT"
+          exit "$code"
+
+      - name: Comment plan
+        if: ${{ !cancelled() && steps.plan.outputs.exitcode != '' }}
+        uses: actions/github-script@v9
+        env:
+          PLAN_LOG: ${{ runner.temp }}/plan.txt
+          PLAN_EXITCODE: ${{ steps.plan.outputs.exitcode }}
+          TOFU_DIR: infra/terraform
+        with:
+          script: |
+            const fs = require('fs');
+            const marker = `<!-- tofu-plan:${process.env.TOFU_DIR} -->`;
+            const output = fs.readFileSync(process.env.PLAN_LOG, 'utf8');
+            const ok = process.env.PLAN_EXITCODE === '0';
+            // 失敗したときは途中の Plan: 行ではなく、最初のエラーを見出しにします。
+            const summary = output.split('\n').find(l => (ok ? /^(Plan:|No changes\.)/ : /^Error:/).test(l)) ?? '';
+            // コメントは 65536 文字まで。
+            const limit = 60000;
+            const shown = output.length > limit ? `${output.slice(0, limit)}\n…（以降は省略。全体はログにあります）` : output;
+            const pr = context.payload.pull_request;
+            const log = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const body = [
+              marker,
+              `### OpenTofu plan: \`${process.env.TOFU_DIR}\``,
+              '',
+              `${ok ? '✅' : '❌'} ${summary || 'plan が失敗しました'}（${pr.head.sha.slice(0, 7)}、[ログ](${log})）`,
+              '',
+              '<details><summary>出力</summary>',
+              '',
+              '```text',
+              shown.trimEnd(),
+              '```',
+              '',
+              '</details>',
+              '',
+              'マージすると、main でもう一度 plan してから `tofu apply` します。',
+            ].join('\n');
+            const comments = await github.paginate(github.rest.issues.listComments, { ...context.repo, issue_number: pr.number });
+            const previous = comments.find(c => c.user?.type === 'Bot' && c.body?.startsWith(marker));
+            if (previous) {
+              await github.rest.issues.updateComment({ ...context.repo, comment_id: previous.id, body });
+            } else {
+              await github.rest.issues.createComment({ ...context.repo, issue_number: pr.number, body });
+            }
+
+  apply:
+    name: Apply
+    needs: [validate]
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      TF_VAR_cloudflare_api_token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.TF_STATE_AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.TF_STATE_AWS_SECRET_ACCESS_KEY }}
+      TF_VAR_state_passphrase: ${{ secrets.TF_STATE_PASSPHRASE }}
+    steps:
+      # skip ではなく失敗させ、マージが apply されていないことを main に残します。
+      - name: Check secrets
+        working-directory: .
+        run: |
+          if [ -z "$TF_VAR_cloudflare_api_token" ] || [ -z "$AWS_ACCESS_KEY_ID" ] || [ -z "$AWS_SECRET_ACCESS_KEY" ] || [ -z "$TF_VAR_state_passphrase" ]; then
+            echo "::error title=Terraform secrets 未設定::Secrets が無いため apply していません。登録してから main でこのワークフローを手動実行してください。"
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+
+      - uses: opentofu/setup-opentofu@v2
+        with:
+          tofu_version: ${{ env.TOFU_VERSION }}
+          tofu_wrapper: false
+
+      - run: tofu init -input=false
+
+      - run: tofu apply -input=false -no-color -auto-approve -lock-timeout=10m

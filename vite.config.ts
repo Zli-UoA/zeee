@@ -12,6 +12,8 @@ export default defineConfig(({ mode }) => {
     fmt: {
       singleQuote: true,
       semi: true,
+      // sops writes these; reformatting would desync them from sops' own output.
+      ignorePatterns: ['**/*.sops.yaml'],
     },
     lint: {
       jsPlugins: [{ name: 'vite-plus', specifier: 'vite-plus/oxlint-plugin' }],

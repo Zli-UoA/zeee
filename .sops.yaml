@@ -1,0 +1,8 @@
+# Recipients that can decrypt every *.sops.yaml (infra/terraform/README.md).
+# After changing this list, run `sops updatekeys -y` on every *.sops.yaml.
+creation_rules:
+  - path_regex: infra/terraform/.*\.sops\.yaml$
+    # Member keys (one per person): an age key, or an `ssh-ed25519 AAAA...` public key.
+    # Do not add cluster keys: nothing in a cluster reads these files.
+    age: >-
+      age10fxdv4f4nd20wsjsnjrfu652p9ntqp7frg3rphger7746nkshe2sg5fhaj
