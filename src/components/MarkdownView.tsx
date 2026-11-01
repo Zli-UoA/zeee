@@ -17,14 +17,14 @@ import rehypeHighlight from 'rehype-highlight';
 import { Badge, Button, Text } from '@cloudflare/kumo';
 import { CheckIcon, CopyIcon } from '@phosphor-icons/react';
 import type { Backlink } from '../server/backlinks';
-import type { PageSummary } from '../server/types';
+import type { PageNavigation } from '../server/types';
 import { rehypeHeadings } from '../markdown/headings';
 import { sameToc, type TocItem } from '../markdown/toc';
 import { createWikiResolver, remarkWikiLinks, type LinkTarget } from '../markdown/wiki';
 
 type Props = {
   markdown: string;
-  pages: PageSummary[];
+  pages: PageNavigation[];
   linkTargets?: LinkTarget[];
   pageId: string;
   pageTitle: string;

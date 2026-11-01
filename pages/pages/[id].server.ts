@@ -1,6 +1,6 @@
 import { defineHandler, defineHead } from 'void';
 import { getSessionUser, loginPath } from '../../src/server/auth';
-import { getPage, listLinkTargets, listPages, listRevisions } from '../../src/server/db';
+import { getPage, listLinkTargets, listPageNavigation, listRevisions } from '../../src/server/db';
 import { pathParam } from '../../src/server/http';
 import { readRecentPages } from '../../src/server/recent';
 import type { RecentPage } from '../../src/shared/recent';
@@ -8,7 +8,7 @@ import type {
   Env,
   LinkTarget,
   PageRecord,
-  PageSummary,
+  PageNavigation,
   RevisionRecord,
   SessionUser,
 } from '../../src/server/types';
@@ -17,7 +17,7 @@ export type Props = {
   user: SessionUser | null;
   page: PageRecord | null;
   revisions: RevisionRecord[];
-  pages: PageSummary[];
+  pages: PageNavigation[];
   recentPages: RecentPage[];
   linkTargets: LinkTarget[];
   loginUrl: string;
@@ -46,7 +46,7 @@ export const loader = defineHandler(async (c): Promise<Props> => {
   const env = c.env as Env;
   const [page, pages, linkTargets] = await Promise.all([
     getPage(env.DB, id),
-    listPages(env.DB),
+    listPageNavigation(env.DB),
     listLinkTargets(env.DB),
   ]);
   if (!page) {

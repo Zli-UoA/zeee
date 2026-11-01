@@ -30,6 +30,8 @@ function database(handler: (sql: string, args: unknown[]) => QueryResult): MockD
         } as unknown as D1Result<T>;
       },
       async first<T>() {
+        if (sql.includes("FROM meta WHERE key = 'migration:0001_scale'"))
+          return { value: '1' } as T;
         return (handler(sql, args).first ?? null) as T | null;
       },
       async run() {
@@ -184,7 +186,7 @@ describe('listLinkTargets', () => {
     const targets = await listLinkTargets(db);
 
     expect(sql).toContain('WHERE deleted_at IS NULL');
-    expect(sql).toContain('LIMIT 200');
+    expect(sql).not.toContain('LIMIT 200');
     expect(sql).toContain('a.created_at DESC');
     expect(sql).toContain('a.alias NOT IN (SELECT title FROM page WHERE deleted_at IS NULL)');
     expect(targets).toEqual([
@@ -261,6 +263,10 @@ describe('PATCH /api/pages/:id', () => {
       statement.sql.startsWith('UPDATE page SET title'),
     );
     expect(update?.args).toEqual(['New Title', expect.any(Number), 'page-1']);
+    expect(
+      db.statements.find((statement) => statement.sql.includes('INSERT INTO page_last_editor'))
+        ?.args,
+    ).toEqual(['page-1', 'user-1', expect.any(Number)]);
     const audit = db.statements.find((statement) =>
       statement.sql.includes('INSERT INTO audit_event'),
     );

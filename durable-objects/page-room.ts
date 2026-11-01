@@ -43,6 +43,10 @@ export class PageRoomObject extends DurableObject<Env> {
         seq INTEGER NOT NULL,
         created_at INTEGER NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS doc_actor (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        actor_id TEXT
+      );
       CREATE TABLE IF NOT EXISTS doc_update (
         seq INTEGER PRIMARY KEY AUTOINCREMENT,
         data BLOB NOT NULL,
@@ -51,6 +55,10 @@ export class PageRoomObject extends DurableObject<Env> {
       );
     `);
 
+    const actor = this.ctx.storage.sql
+      .exec('SELECT actor_id FROM doc_actor WHERE id = 1')
+      .toArray()[0] as { actor_id: string | null } | undefined;
+    this.lastActorId = actor?.actor_id ?? null;
     const snapshot = this.ctx.storage.sql
       .exec('SELECT state, created_at FROM doc_snapshot WHERE id = 1')
       .toArray()[0] as { state: ArrayBuffer; created_at: number } | undefined;
@@ -104,7 +112,7 @@ export class PageRoomObject extends DurableObject<Env> {
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair);
     this.ctx.acceptWebSocket(server);
-    this.lastActorId = userId;
+    server.serializeAttachment({ userId });
     server.send(
       JSON.stringify({ type: 'sync', update: encodeBase64(Y.encodeStateAsUpdate(this.doc)) }),
     );
@@ -144,7 +152,8 @@ export class PageRoomObject extends DurableObject<Env> {
       // Validate on a copy first. A failed SQL write must never appear in later syncs.
       // Replays (including delete-only updates) need an ack, but no additional log row.
       if (!containsUpdate(this.doc, update)) {
-        const actor = parsed.actor ?? this.lastActorId;
+        const attachment = socket.deserializeAttachment() as { userId?: unknown } | null;
+        const actor = typeof attachment?.userId === 'string' ? attachment.userId : null;
         this.saveUpdate(update, actor);
         Y.applyUpdate(this.doc, update, 'remote');
         this.lastActorId = actor;
@@ -162,6 +171,10 @@ export class PageRoomObject extends DurableObject<Env> {
       update,
       actorId,
       Date.now(),
+    );
+    this.ctx.storage.sql.exec(
+      'INSERT INTO doc_actor (id, actor_id) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET actor_id = excluded.actor_id',
+      actorId,
     );
     if (!this.alarmScheduled) {
       this.alarmScheduled = true;
@@ -195,7 +208,7 @@ export class PageRoomObject extends DurableObject<Env> {
     if (!this.pageId) return;
 
     const markdown = this.text.toJSON();
-    await materializePage(this.env.DB, this.pageId, markdown);
+    await materializePage(this.env.DB, this.pageId, markdown, this.lastActorId);
 
     const now = Date.now();
     const latest = await latestRevision(this.env.DB, this.pageId);
@@ -225,7 +238,7 @@ export class PageRoomObject extends DurableObject<Env> {
 
   private async snapshot(userId: string): Promise<Response> {
     const markdown = this.text.toJSON();
-    await materializePage(this.env.DB, this.pageId, markdown);
+    await materializePage(this.env.DB, this.pageId, markdown, this.lastActorId);
     const version = await createRevision(this.env.DB, this.pageId, markdown, userId, true);
     return Response.json({ version, markdown });
   }
@@ -255,7 +268,7 @@ export class PageRoomObject extends DurableObject<Env> {
     this.lastActorId = userId;
     this.broadcast({ type: 'update', update: encodeBase64(update) });
 
-    await materializePage(this.env.DB, this.pageId, this.text.toJSON());
+    await materializePage(this.env.DB, this.pageId, this.text.toJSON(), userId);
     const version = await createRevision(
       this.env.DB,
       this.pageId,

@@ -4,6 +4,7 @@ import { Button, Empty, LayerCard, LayerDialog, LinkButton, Text } from '@cloudf
 import { ArrowCounterClockwiseIcon, TrashIcon } from '@phosphor-icons/react';
 import type { Props } from './trash.server';
 import { AppShell } from '../src/components/AppShell';
+import { Pagination } from '../src/components/Pagination';
 import { Gate } from '../src/components/Gate';
 import { formatDate } from '../src/shared/format';
 import type { DeletedPageSummary } from '../src/server/types';
@@ -18,6 +19,9 @@ export default function TrashPage({
   recentPages,
   deletedPages: initialDeletedPages,
   loginUrl,
+  nextCursor,
+  cursor,
+  limit,
 }: Props) {
   const [deletedPages, setDeletedPages] = useState(initialDeletedPages);
   const [pending, setPending] = useState<Pending>(null);
@@ -27,6 +31,10 @@ export default function TrashPage({
   const [dialogError, setDialogError] = useState('');
   const [notice, setNotice] = useState<Notice | null>(null);
   const purgeBusy = pending?.action === 'purge';
+
+  useEffect(() => {
+    setDeletedPages(initialDeletedPages);
+  }, [initialDeletedPages]);
 
   useEffect(() => {
     if (confirming) setShownConfirming(confirming);
@@ -145,7 +153,9 @@ export default function TrashPage({
             </div>
           ) : null}
 
-          {deletedPages.length === 0 ? (
+          {deletedPages.length === 0 && (cursor || nextCursor) ? (
+            <Text variant="secondary">このページの削除済みページはありません。</Text>
+          ) : deletedPages.length === 0 ? (
             <Empty
               icon={<TrashIcon size={32} />}
               title="ゴミ箱は空です"
@@ -187,7 +197,8 @@ export default function TrashPage({
                         </span>
                         <span aria-hidden="true">·</span>
                         <span className="max-w-full truncate">
-                          {page.createdByName || '不明なユーザー'}
+                          <span className="sr-only">最終更新者 </span>
+                          {page.updatedByName || '不明なユーザー'}
                         </span>
                       </div>
                     </div>
@@ -223,6 +234,7 @@ export default function TrashPage({
               </ul>
             </LayerCard>
           )}
+          <Pagination path="/trash" cursor={cursor} nextCursor={nextCursor} limit={limit} />
         </div>
       )}
 

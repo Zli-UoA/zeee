@@ -15,13 +15,13 @@ import { CreatePageDialog } from './CreatePageDialog';
 import { ZeeeLogo } from './ZeeeLogo';
 import { sidebarPageLists } from '../client/sidebarPages';
 import { useRecentPages, type RecentPage } from '../client/useRecentPages';
-import type { PageSummary, SessionUser } from '../server/types';
+import type { PageNavigation, SessionUser } from '../server/types';
 
 type NavSection = 'trash';
 
 type Props = {
   user: SessionUser | null;
-  pages: PageSummary[];
+  pages: PageNavigation[];
   initialRecentPages?: RecentPage[];
   activePageId?: string;
   activeTitle?: string;

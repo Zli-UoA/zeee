@@ -1,3 +1,5 @@
+import scaleMigration from '../../migrations/0001_scale.sql?raw';
+
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS meta (
   key TEXT PRIMARY KEY,
@@ -78,20 +80,41 @@ CREATE TABLE IF NOT EXISTS audit_event (
 );
 `;
 
-let schemaPromise: Promise<void> | null = null;
+const schemaPromises = new WeakMap<D1Database, Promise<void>>();
 
 export function ensureSchema(db: D1Database): Promise<void> {
-  if (!schemaPromise) {
-    schemaPromise = createSchema(db).catch((error) => {
-      schemaPromise = null;
+  let promise = schemaPromises.get(db);
+  if (!promise) {
+    promise = createSchema(db).catch((error) => {
+      schemaPromises.delete(db);
       throw error;
     });
+    schemaPromises.set(db, promise);
   }
-  return schemaPromise;
+  return promise;
 }
 
 async function createSchema(db: D1Database): Promise<void> {
-  await db.exec(SCHEMA);
+  // D1 exec treats each line as one statement (unlike SQLite's exec).
+  await db.exec(
+    SCHEMA.split(';')
+      .map((sql) => sql.trim().replace(/\s+/g, ' '))
+      .filter(Boolean)
+      .join(';\n'),
+  );
+  const migrated = await db
+    .prepare("SELECT value FROM meta WHERE key = 'migration:0001_scale'")
+    .first();
+  if (!migrated) {
+    // D1 batch is transactional: the marker is committed with the complete migration.
+    await db.batch(
+      scaleMigration
+        .split(';')
+        .map((sql) => sql.trim())
+        .filter(Boolean)
+        .map((sql) => db.prepare(sql)),
+    );
+  }
 
   try {
     await db.exec(

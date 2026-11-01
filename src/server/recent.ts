@@ -6,11 +6,11 @@ import {
   recentPagesFromIds,
   type RecentPage,
 } from '../shared/recent';
-import type { PageSummary } from './types';
+import type { PageNavigation } from './types';
 
 export function readRecentPages(
   c: CloudContext,
-  pages: PageSummary[],
+  pages: PageNavigation[],
   userId: string,
   activePageId?: string,
 ): RecentPage[] {

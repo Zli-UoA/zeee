@@ -41,6 +41,8 @@ function database(handler: (sql: string, args: unknown[]) => QueryResult): D1Dat
         } as unknown as D1Result<T>;
       },
       async first<T>() {
+        if (sql.includes("FROM meta WHERE key = 'migration:0001_scale'"))
+          return { value: '1' } as T;
         return (handler(sql, args).first ?? null) as T | null;
       },
       async run() {
@@ -74,6 +76,8 @@ function pageSummary(id: string, title: string, createdAt: number, updatedAt: nu
     title,
     createdAt,
     createdByName: '',
+    updatedBy: null,
+    updatedByName: '',
     excerpt: '',
     updatedAt,
   };
@@ -168,11 +172,11 @@ describe('listPages', () => {
       };
     });
 
-    const pages = await listPages(db);
+    const { items: pages } = await listPages(db);
 
     expect(sql).toContain('LEFT JOIN app_user');
     expect(sql).toContain('ORDER BY p.updated_at DESC');
-    expect(sql).toContain('LIMIT 200');
+    expect(sql).toContain('LIMIT ?');
     expect(pages.map((page) => page.id)).toEqual(['newer', 'older']);
     expect(pages[0]).toMatchObject({
       createdAt: 100,
@@ -248,17 +252,19 @@ describe('listDeletedPages', () => {
       };
     });
 
-    const pages = await listDeletedPages(db);
+    const { items: pages } = await listDeletedPages(db);
 
     expect(sql).toContain('p.deleted_at IS NOT NULL');
     expect(sql).toContain('ORDER BY p.deleted_at DESC');
-    expect(sql).toContain('LIMIT 200');
+    expect(sql).toContain('LIMIT ?');
     expect(pages).toEqual([
       {
         id: 'trashed',
         title: '古いメモ',
         createdAt: 100,
         createdByName: '山田 太郎',
+        updatedBy: null,
+        updatedByName: '',
         excerpt: '見出し 本文です。',
         updatedAt: 300,
         deletedAt: 400,
@@ -268,6 +274,8 @@ describe('listDeletedPages', () => {
         title: 'さらに古いメモ',
         createdAt: 50,
         createdByName: '',
+        updatedBy: null,
+        updatedByName: '',
         excerpt: '',
         updatedAt: 150,
         deletedAt: 200,
@@ -421,7 +429,7 @@ describe('searchPages', () => {
       };
     });
 
-    const results = await searchPages(db, 'Zeee');
+    const { items: results } = await searchPages(db, 'Zeee');
 
     expect(sql).toContain('p.updated_at AS updated_at');
     expect(results).toEqual([
@@ -430,6 +438,8 @@ describe('searchPages', () => {
         title: 'Zeee の使い方',
         excerpt: 'Zeee は Markdown の知識ベース。',
         updatedAt: 1234,
+        updatedBy: null,
+        updatedByName: '',
       },
     ]);
   });
@@ -450,7 +460,7 @@ describe('searchPages', () => {
       };
     });
 
-    const results = await searchPages(db, 'メモ');
+    const { items: results } = await searchPages(db, 'メモ');
 
     expect(sql).toContain('p.updated_at AS updated_at');
     expect(results[0]).toEqual({
@@ -458,6 +468,8 @@ describe('searchPages', () => {
       title: 'メモ',
       excerpt: '短いメモの本文',
       updatedAt: 5678,
+      updatedBy: null,
+      updatedByName: '',
     });
   });
 });

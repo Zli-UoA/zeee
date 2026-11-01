@@ -25,7 +25,10 @@ function setup(initial: Uint8Array[] = []) {
   });
   const peer = { send: vi.fn() };
   const send = vi.fn();
-  const socket = { send } as unknown as WebSocket;
+  const socket = {
+    send,
+    deserializeAttachment: () => null,
+  } as unknown as WebSocket;
   const ctx = {
     id: { name: 'page-1' },
     storage: { sql: { exec }, setAlarm: vi.fn().mockResolvedValue(undefined) },

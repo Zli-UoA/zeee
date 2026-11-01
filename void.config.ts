@@ -24,6 +24,7 @@ export default defineConfig({
       {
         binding: 'DB',
         database_name: 'zeee',
+        migrations_dir: 'migrations',
         database_id: '7c9e6a52-5f2e-4d7a-9a1b-8f3c2d1e4b60',
       },
     ],

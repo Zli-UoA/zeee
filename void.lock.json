@@ -11,6 +11,7 @@
       {
         "binding": "DB",
         "database_name": "zeee",
+        "migrations_dir": "migrations",
         "database_id": "7c9e6a52-5f2e-4d7a-9a1b-8f3c2d1e4b60"
       }
     ]
@@ -26,7 +27,8 @@
       {
         "binding": "DB",
         "database_name": "zeee",
-        "database_id": "7c9e6a52-5f2e-4d7a-9a1b-8f3c2d1e4b60"
+        "database_id": "7c9e6a52-5f2e-4d7a-9a1b-8f3c2d1e4b60",
+        "migrations_dir": "migrations"
       }
     ],
     "durable_objects": {
@@ -44,5 +46,5 @@
       }
     ]
   },
-  "text": "{\n  \"name\": \"zeee\",\n  \"vars\": {\n    \"AUTHZ_ISSUER\": \"https://account.zli.works/api/auth\",\n    \"AUTHZ_CLIENT_ID\": \"ocfGoISXBgnRMqogOLEdYsZUXusTBczV\",\n    \"PUBLIC_ORIGIN\": \"https://zeee.zli.works\"\n  },\n  \"d1_databases\": [\n    {\n      \"binding\": \"DB\",\n      \"database_name\": \"zeee\",\n      \"database_id\": \"7c9e6a52-5f2e-4d7a-9a1b-8f3c2d1e4b60\"\n    }\n  ],\n  \"durable_objects\": {\n    \"bindings\": [\n      {\n        \"name\": \"PAGE_ROOM\",\n        \"class_name\": \"PageRoomDurableObject\"\n      }\n    ]\n  },\n  \"migrations\": [\n    {\n      \"tag\": \"void-durable-page-room-v1\",\n      \"new_sqlite_classes\": [\n        \"PageRoomDurableObject\"\n      ]\n    }\n  ]\n}\n"
+  "text": "{\n  \"name\": \"zeee\",\n  \"vars\": {\n    \"AUTHZ_ISSUER\": \"https://account.zli.works/api/auth\",\n    \"AUTHZ_CLIENT_ID\": \"ocfGoISXBgnRMqogOLEdYsZUXusTBczV\",\n    \"PUBLIC_ORIGIN\": \"https://zeee.zli.works\"\n  },\n  \"d1_databases\": [\n    {\n      \"binding\": \"DB\",\n      \"database_name\": \"zeee\",\n      \"database_id\": \"7c9e6a52-5f2e-4d7a-9a1b-8f3c2d1e4b60\",\n      \"migrations_dir\": \"migrations\"\n    }\n  ],\n  \"durable_objects\": {\n    \"bindings\": [\n      {\n        \"name\": \"PAGE_ROOM\",\n        \"class_name\": \"PageRoomDurableObject\"\n      }\n    ]\n  },\n  \"migrations\": [\n    {\n      \"tag\": \"void-durable-page-room-v1\",\n      \"new_sqlite_classes\": [\n        \"PageRoomDurableObject\"\n      ]\n    }\n  ]\n}\n"
 }

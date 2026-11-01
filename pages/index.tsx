@@ -6,12 +6,8 @@ import { FilesIcon, MagnifyingGlassIcon, PlusIcon } from '@phosphor-icons/react'
 import { AppShell } from '../src/components/AppShell';
 import { Gate } from '../src/components/Gate';
 import { formatDate } from '../src/shared/format';
-import {
-  PAGE_LIST_LIMIT,
-  type PageSort,
-  type PageSummary,
-  type SearchResult,
-} from '../src/server/types';
+import type { PageSort, PageSummary, SearchResult } from '../src/server/types';
+import { Pagination } from '../src/components/Pagination';
 
 const SORT_OPTIONS: { value: PageSort; label: string }[] = [
   { value: 'updated', label: '更新順' },
@@ -50,6 +46,9 @@ export default function Home({
   query,
   sort,
   results,
+  cursor,
+  nextCursor,
+  limit,
   now,
   loginUrl,
 }: Props) {
@@ -83,14 +82,9 @@ export default function Home({
               </Text>
               <Text variant="secondary" size="sm">
                 {query
-                  ? `「${query}」に一致するページ ${results.length}件`
-                  : `${pages.length}ページ`}
+                  ? `「${query}」に一致するページ ${results.length}件${cursor || nextCursor ? 'を表示' : ''}`
+                  : `${pages.length}ページ${cursor || nextCursor ? 'を表示' : ''}`}
               </Text>
-              {!query && pages.length >= PAGE_LIST_LIMIT ? (
-                <Text variant="secondary" size="sm">
-                  最新{PAGE_LIST_LIMIT}件を表示しています。
-                </Text>
-              ) : null}
             </div>
 
             {!query && pages.length > 0 ? (
@@ -148,7 +142,9 @@ export default function Home({
             />
           </form>
 
-          {query && results.length === 0 ? (
+          {cursor && (query ? results.length : pages.length) === 0 ? (
+            <Text variant="secondary">この位置より後のページはありません。</Text>
+          ) : query && results.length === 0 ? (
             <Empty
               icon={<MagnifyingGlassIcon size={32} />}
               title="該当なし"
@@ -240,6 +236,13 @@ export default function Home({
               )}
             </div>
           )}
+          <Pagination
+            query={query}
+            sort={sort}
+            cursor={cursor}
+            nextCursor={nextCursor}
+            limit={limit}
+          />
         </div>
       )}
     </AppShell>
@@ -318,7 +321,11 @@ function PageRow({
           {page.excerpt || '本文はまだありません'}
         </span>
         <span className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-kumo-subtle">
-          <span className="max-w-full truncate">{page.createdByName || '不明なユーザー'}</span>
+          <span className="max-w-full truncate">
+            <span className="sr-only">{dateField === 'createdAt' ? '作成者' : '最終更新者'} </span>
+            {(dateField === 'createdAt' ? page.createdByName : page.updatedByName) ||
+              '不明なユーザー'}
+          </span>
           <span aria-hidden="true">·</span>
           <span>
             <span className="sr-only">{dateField === 'createdAt' ? '作成日時' : '更新日時'} </span>
@@ -344,7 +351,8 @@ function SearchResultRow({ result, query }: { result: SearchResult; query: strin
           <Highlight text={result.excerpt || '本文はまだありません'} query={query} />
         </span>
         <span className="text-sm text-kumo-subtle">
-          <span className="sr-only">更新日時 </span>
+          <span className="sr-only">最終更新者 </span>
+          {result.updatedByName || '不明なユーザー'} · <span className="sr-only">更新日時 </span>
           <time dateTime={new Date(result.updatedAt).toISOString()}>
             {formatDate(result.updatedAt)}
           </time>

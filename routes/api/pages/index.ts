@@ -2,13 +2,22 @@ import { defineHandler } from 'void';
 import { getSessionUser } from '../../../src/server/auth';
 import { createPage, listPages, recordAudit } from '../../../src/server/db';
 import { jsonError, sameOrigin } from '../../../src/server/http';
+import { PaginationError, parsePagination, parsePageSort } from '../../../src/server/pagination';
 import type { Env } from '../../../src/server/types';
 
 export const GET = defineHandler(async (c) => {
   const user = await getSessionUser(c);
   if (!user) return jsonError(c, 401, 'login required');
   const env = c.env as Env;
-  return { pages: await listPages(env.DB) };
+  try {
+    const params = new URL(c.req.url).searchParams;
+    const sort = parsePageSort(params.get('sort'));
+    const slice = await listPages(env.DB, { ...parsePagination(params), sort });
+    return { pages: slice.items, nextCursor: slice.nextCursor, limit: slice.limit, sort };
+  } catch (error) {
+    if (error instanceof PaginationError) return jsonError(c, 400, error.message);
+    throw error;
+  }
 });
 
 export const POST = defineHandler(async (c) => {

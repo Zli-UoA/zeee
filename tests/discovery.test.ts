@@ -235,6 +235,8 @@ function pageSummary(id: string): PageSummary {
     title: id,
     createdAt: 0,
     createdByName: '',
+    updatedBy: null,
+    updatedByName: '',
     excerpt: '',
     updatedAt: 0,
   };
