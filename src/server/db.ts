@@ -1,10 +1,20 @@
 import { randomToken, sha256Base64Url, uuid } from './crypto';
 import { ensureSchema } from './schema';
 import {
-  PAGE_LIST_LIMIT,
+  DEFAULT_SEARCH_SIZE,
+  PaginationError,
+  pageSize,
+  pageSlice,
+  readCursor,
+  type Cursor,
+} from './pagination';
+import {
   type DeletedPageSummary,
   type LinkTarget,
   type PageRecord,
+  type PageNavigation,
+  type PageSlice,
+  type PaginationOptions,
   type PageSort,
   type PageSummary,
   type RevisionRecord,
@@ -40,6 +50,8 @@ type PageSummaryRow = {
   created_at: number;
   updated_at: number;
   created_by_name: string | null;
+  updated_by: string | null;
+  updated_by_name: string | null;
   excerpt_source: string | null;
 };
 
@@ -48,6 +60,9 @@ type DeletedPageRow = PageSummaryRow & {
 };
 
 type SearchRow = {
+  updated_by: string | null;
+  updated_by_name: string | null;
+  rank: number;
   id: string;
   title: string;
   excerpt: string | null;
@@ -196,22 +211,110 @@ export async function consumeLoginFlow(
   return { nonce: row.nonce, codeVerifier: row.code_verifier, returnTo: row.return_to };
 }
 
-export async function listPages(db: D1Database): Promise<PageSummary[]> {
+const SUMMARY_COLUMNS = `p.id, p.title, p.created_at, p.updated_at,
+  u.display_name AS created_by_name, e.author_id AS updated_by, editor.display_name AS updated_by_name,
+  substr(COALESCE(b.markdown, ''), 1, ${EXCERPT_SOURCE_LENGTH}) AS excerpt_source`;
+const EDITOR_JOINS = `LEFT JOIN page_last_editor e ON e.page_id = p.id
+  LEFT JOIN app_user editor ON editor.id = e.author_id`;
+const SUMMARY_JOINS = `LEFT JOIN app_user u ON u.id = p.created_by
+  LEFT JOIN page_body b ON b.page_id = p.id ${EDITOR_JOINS}`;
+
+// The sidebar and recent-page reconciliation need the complete lightweight catalogue,
+// independently of the currently displayed page, sort, and search query.
+export async function listPageNavigation(db: D1Database): Promise<PageNavigation[]> {
   await ensureSchema(db);
   const result = await db
-    .prepare(
-      `SELECT p.id, p.title, p.created_at, p.updated_at,
-              u.display_name AS created_by_name,
-              substr(COALESCE(b.markdown, ''), 1, ${EXCERPT_SOURCE_LENGTH}) AS excerpt_source
-       FROM page p
-       LEFT JOIN app_user u ON u.id = p.created_by
-       LEFT JOIN page_body b ON b.page_id = p.id
-       WHERE p.deleted_at IS NULL
-       ORDER BY p.updated_at DESC
-       LIMIT ${PAGE_LIST_LIMIT}`,
-    )
+    .prepare(`SELECT id, title, updated_at FROM page
+    WHERE deleted_at IS NULL ORDER BY updated_at DESC, created_at DESC, id ASC`)
+    .all<{ id: string; title: string; updated_at: number }>();
+  return result.results.map((row) => ({ id: row.id, title: row.title, updatedAt: row.updated_at }));
+}
+
+export async function listPages(
+  db: D1Database,
+  options: PaginationOptions & { sort?: PageSort } = {},
+): Promise<PageSlice<PageSummary>> {
+  const limit = pageSize(options);
+  const sort = options.sort ?? 'updated';
+  const cursor = readCursor(options.cursor, [sort]);
+  await ensureSchema(db);
+  if (sort === 'title') return listPagesByTitle(db, limit, cursor);
+  const primary = sort === 'created' ? 'created_at' : 'updated_at';
+  const secondary = sort === 'created' ? 'updated_at' : 'created_at';
+  const keys = cursor?.keys ?? [];
+  const after = cursor
+    ? `AND p.${primary} <= ? AND (p.${primary} < ? OR (p.${primary} = ? AND
+    (p.${secondary} < ? OR (p.${secondary} = ? AND p.id > ?))))`
+    : '';
+  const args = cursor
+    ? [keys[0], keys[0], keys[0], keys[1], keys[1], keys[2], limit + 1]
+    : [limit + 1];
+  const result = await db
+    .prepare(`SELECT ${SUMMARY_COLUMNS} FROM page p ${SUMMARY_JOINS}
+    WHERE p.deleted_at IS NULL ${after}
+    ORDER BY p.${primary} DESC, p.${secondary} DESC, p.id ASC LIMIT ?`)
+    .bind(...args)
     .all<PageSummaryRow>();
-  return (result.results ?? []).map(toPageSummary);
+  const slice = pageSlice(result.results, limit, (row) => ({
+    v: 1,
+    kind: sort,
+    query: '',
+    keys: [row[primary], row[secondary], row.id],
+  }));
+  return { ...slice, items: slice.items.map(toPageSummary) };
+}
+
+const titleCollator = new Intl.Collator('ja', { numeric: true, sensitivity: 'base' });
+type TitleBoundary = { id: string; title: string; updated_at: number };
+function compareTitles(a: TitleBoundary, b: TitleBoundary): number {
+  return (
+    titleCollator.compare(a.title, b.title) ||
+    b.updated_at - a.updated_at ||
+    a.id.localeCompare(b.id)
+  );
+}
+
+async function listPagesByTitle(
+  db: D1Database,
+  limit: number,
+  cursor: Cursor | null,
+): Promise<PageSlice<PageSummary>> {
+  // SQLite/D1 cannot register an ICU collation. Preserve the existing Japanese
+  // natural order over thin metadata; only hydrate the requested page's bodies.
+  const result = await db
+    .prepare(`SELECT id, title, updated_at FROM page
+    WHERE deleted_at IS NULL`)
+    .all<TitleBoundary>();
+  const boundary = cursor
+    ? {
+        title: cursor.keys[0] as string,
+        updated_at: cursor.keys[1] as number,
+        id: cursor.keys[2] as string,
+      }
+    : null;
+  const candidates = result.results
+    .filter((row) => !boundary || compareTitles(row, boundary) > 0)
+    .sort(compareTitles);
+  const slice = pageSlice(candidates, limit, (row) => ({
+    v: 1,
+    kind: 'title',
+    query: '',
+    keys: [row.title, row.updated_at, row.id],
+  }));
+  if (!slice.items.length) return { ...slice, items: [] };
+  const rows = await db
+    .prepare(`SELECT ${SUMMARY_COLUMNS} FROM page p ${SUMMARY_JOINS}
+    WHERE p.deleted_at IS NULL AND p.id IN (${slice.items.map(() => '?').join(',')})`)
+    .bind(...slice.items.map((row) => row.id))
+    .all<PageSummaryRow>();
+  const byId = new Map(rows.results.map((row) => [row.id, toPageSummary(row)]));
+  return {
+    ...slice,
+    items: slice.items.flatMap((row) => {
+      const page = byId.get(row.id);
+      return page ? [page] : [];
+    }),
+  };
 }
 
 export async function listLinkTargets(db: D1Database): Promise<LinkTarget[]> {
@@ -222,7 +325,6 @@ export async function listLinkTargets(db: D1Database): Promise<LinkTarget[]> {
          SELECT id, title, updated_at FROM page
          WHERE deleted_at IS NULL
          ORDER BY updated_at DESC
-         LIMIT ${PAGE_LIST_LIMIT}
        )
        SELECT t.id, t.title, t.updated_at, a.alias
        FROM targets t
@@ -245,22 +347,31 @@ export async function listLinkTargets(db: D1Database): Promise<LinkTarget[]> {
   return [...targets.values()];
 }
 
-export async function listDeletedPages(db: D1Database): Promise<DeletedPageSummary[]> {
+export async function listDeletedPages(
+  db: D1Database,
+  options: PaginationOptions = {},
+): Promise<PageSlice<DeletedPageSummary>> {
+  const limit = pageSize(options);
+  const cursor = readCursor(options.cursor, ['trash']);
   await ensureSchema(db);
+  const after = cursor
+    ? 'AND p.deleted_at <= ? AND (p.deleted_at < ? OR (p.deleted_at = ? AND p.id > ?))'
+    : '';
+  const args = cursor
+    ? [cursor.keys[0], cursor.keys[0], cursor.keys[0], cursor.keys[1], limit + 1]
+    : [limit + 1];
   const result = await db
-    .prepare(
-      `SELECT p.id, p.title, p.created_at, p.updated_at, p.deleted_at,
-              u.display_name AS created_by_name,
-              substr(COALESCE(b.markdown, ''), 1, ${EXCERPT_SOURCE_LENGTH}) AS excerpt_source
-       FROM page p
-       LEFT JOIN app_user u ON u.id = p.created_by
-       LEFT JOIN page_body b ON b.page_id = p.id
-       WHERE p.deleted_at IS NOT NULL
-       ORDER BY p.deleted_at DESC
-       LIMIT ${PAGE_LIST_LIMIT}`,
-    )
+    .prepare(`SELECT ${SUMMARY_COLUMNS}, p.deleted_at FROM page p ${SUMMARY_JOINS}
+    WHERE p.deleted_at IS NOT NULL ${after} ORDER BY p.deleted_at DESC, p.id ASC LIMIT ?`)
+    .bind(...args)
     .all<DeletedPageRow>();
-  return (result.results ?? []).map(toDeletedPageSummary);
+  const slice = pageSlice(result.results, limit, (row) => ({
+    v: 1,
+    kind: 'trash',
+    query: '',
+    keys: [row.deleted_at, row.id],
+  }));
+  return { ...slice, items: slice.items.map(toDeletedPageSummary) };
 }
 
 export function sortPageSummaries(pages: PageSummary[], sort: PageSort): PageSummary[] {
@@ -320,6 +431,8 @@ function toPageSummary(row: PageSummaryRow): PageSummary {
     title: row.title,
     createdAt: row.created_at,
     createdByName: row.created_by_name ?? '',
+    updatedBy: row.updated_by ?? null,
+    updatedByName: row.updated_by_name ?? '',
     excerpt: excerptFromMarkdown(row.excerpt_source ?? ''),
     updatedAt: row.updated_at,
   };
@@ -337,21 +450,24 @@ export async function getPage(db: D1Database, pageId: string): Promise<PageRecor
   const row = await db
     .prepare(
       `SELECT p.id, p.title, p.created_by, p.created_at, p.updated_at,
-              u.display_name AS created_by_name,
+              u.display_name AS created_by_name, e.author_id AS updated_by, editor.display_name AS updated_by_name,
               COALESCE(b.markdown, '') AS markdown
        FROM page p
        LEFT JOIN app_user u ON u.id = p.created_by
        LEFT JOIN page_body b ON b.page_id = p.id
+       ${EDITOR_JOINS}
        WHERE p.id = ? AND p.deleted_at IS NULL`,
     )
     .bind(pageId)
-    .first<PageRow & { created_by_name: string | null; markdown: string }>();
+    .first<PageRow & PageSummaryRow & { markdown: string }>();
   if (!row) return null;
   return {
     id: row.id,
     title: row.title,
     createdBy: row.created_by,
     createdByName: row.created_by_name ?? '',
+    updatedBy: row.updated_by ?? null,
+    updatedByName: row.updated_by_name ?? '',
     createdAt: row.created_at,
     excerpt: excerptFromMarkdown(row.markdown),
     updatedAt: row.updated_at,
@@ -380,6 +496,7 @@ export async function createPage(
     db
       .prepare('INSERT INTO page_body (page_id, markdown, updated_at) VALUES (?, ?, ?)')
       .bind(id, '', timestamp),
+    editorStatement(db, id, userId, timestamp),
     db.prepare('DELETE FROM page_fts WHERE page_id = ?').bind(id),
     db.prepare('INSERT INTO page_fts (page_id, title, body) VALUES (?, ?, ?)').bind(id, title, ''),
   ]);
@@ -388,6 +505,8 @@ export async function createPage(
     title,
     createdAt: timestamp,
     createdByName: author?.display_name ?? '',
+    updatedBy: userId,
+    updatedByName: author?.display_name ?? '',
     excerpt: '',
     updatedAt: timestamp,
   };
@@ -405,6 +524,7 @@ export async function updatePageTitle(
   pageId: string,
   title: string,
   previousTitle?: string,
+  actorId?: string,
 ): Promise<void> {
   await ensureSchema(db);
   const timestamp = Date.now();
@@ -426,6 +546,7 @@ export async function updatePageTitle(
       )
       .bind(pageId),
   );
+  if (actorId) statements.push(editorStatement(db, pageId, actorId, timestamp));
   await db.batch(statements);
 }
 
@@ -497,6 +618,7 @@ export async function materializePage(
   db: D1Database,
   pageId: string,
   markdown: string,
+  actorId: string | null = null,
 ): Promise<string> {
   await ensureSchema(db);
   const timestamp = Date.now();
@@ -506,6 +628,7 @@ export async function materializePage(
     .first<{ title: string }>();
   const title = page?.title ?? 'Untitled';
   await db.batch([
+    editorStatement(db, pageId, actorId, timestamp, markdown),
     db
       .prepare(
         `INSERT INTO page_body (page_id, markdown, updated_at) VALUES (?, ?, ?)
@@ -591,44 +714,69 @@ function toRevision(row: RevisionRow): RevisionRecord {
   };
 }
 
-export async function searchPages(db: D1Database, query: string): Promise<SearchResult[]> {
-  await ensureSchema(db);
+export async function searchPages(
+  db: D1Database,
+  query: string,
+  options: PaginationOptions = {},
+): Promise<PageSlice<SearchResult>> {
+  const limit = pageSize(options, DEFAULT_SEARCH_SIZE);
   const trimmed = query.trim();
-  if (!trimmed) return [];
-
-  if (Array.from(trimmed).length >= 3) {
+  if (trimmed.length > 500) throw new PaginationError('q must be at most 500 characters');
+  const cursor = readCursor(options.cursor, ['fts', 'like'], trimmed);
+  if (!trimmed) return { items: [], nextCursor: null, limit };
+  await ensureSchema(db);
+  if (cursor?.kind === 'fts' || (!cursor && Array.from(trimmed).length >= 3)) {
     try {
       const match = `"${trimmed.replaceAll('"', '""')}"`;
+      const after = cursor ? 'AND (rank > ? OR (rank = ? AND p.id > ?))' : '';
+      const args = cursor
+        ? [match, cursor.keys[0], cursor.keys[0], cursor.keys[1], limit + 1]
+        : [match, limit + 1];
       const result = await db
-        .prepare(
-          `SELECT f.page_id AS id, f.title AS title,
-                  snippet(page_fts, 2, '', '', '…', 16) AS excerpt,
-                  p.updated_at AS updated_at
-           FROM page_fts f JOIN page p ON p.id = f.page_id
-           WHERE page_fts MATCH ? AND p.deleted_at IS NULL
-           ORDER BY rank LIMIT 20`,
-        )
-        .bind(match)
+        .prepare(`SELECT f.page_id AS id, f.title AS title,
+        snippet(page_fts, 2, '', '', '…', 16) AS excerpt, rank,
+        p.updated_at AS updated_at, e.author_id AS updated_by, editor.display_name AS updated_by_name
+        FROM page_fts f JOIN page p ON p.id = f.page_id ${EDITOR_JOINS}
+        WHERE page_fts MATCH ? AND p.deleted_at IS NULL ${after}
+        ORDER BY rank ASC, p.id ASC LIMIT ?`)
+        .bind(...args)
         .all<SearchRow>();
-      return (result.results ?? []).map(toSearchResult);
-    } catch {
-      // Fall through to LIKE for stores without a usable FTS tokenizer.
+      const slice = pageSlice(result.results, limit, (row) => ({
+        v: 1,
+        kind: 'fts',
+        query: trimmed,
+        keys: [row.rank, row.id],
+      }));
+      return { ...slice, items: slice.items.map(toSearchResult) };
+    } catch (error) {
+      // Never change ranking midway through a cursor traversal.
+      if (cursor) throw error;
+      // Preserve the existing LIKE fallback for stores without usable FTS.
     }
   }
-
   const like = `%${trimmed}%`;
+  const after = cursor
+    ? 'AND p.updated_at <= ? AND (p.updated_at < ? OR (p.updated_at = ? AND p.id > ?))'
+    : '';
+  const args = cursor
+    ? [like, like, cursor.keys[0], cursor.keys[0], cursor.keys[0], cursor.keys[1], limit + 1]
+    : [like, like, limit + 1];
   const result = await db
-    .prepare(
-      `SELECT p.id, p.title,
-              substr(COALESCE(b.markdown, ''), 1, ${EXCERPT_SOURCE_LENGTH}) AS excerpt,
-              p.updated_at AS updated_at
-       FROM page p LEFT JOIN page_body b ON b.page_id = p.id
-       WHERE p.deleted_at IS NULL AND (p.title LIKE ? OR b.markdown LIKE ?)
-       ORDER BY p.updated_at DESC LIMIT 20`,
-    )
-    .bind(like, like)
+    .prepare(`SELECT p.id, p.title,
+    substr(COALESCE(b.markdown, ''), 1, ${EXCERPT_SOURCE_LENGTH}) AS excerpt,
+    p.updated_at AS updated_at, e.author_id AS updated_by, editor.display_name AS updated_by_name
+    FROM page p LEFT JOIN page_body b ON b.page_id = p.id ${EDITOR_JOINS}
+    WHERE p.deleted_at IS NULL AND (p.title LIKE ? OR b.markdown LIKE ?) ${after}
+    ORDER BY p.updated_at DESC, p.id ASC LIMIT ?`)
+    .bind(...args)
     .all<SearchRow>();
-  return (result.results ?? []).map(toSearchResult);
+  const slice = pageSlice(result.results, limit, (row) => ({
+    v: 1,
+    kind: 'like',
+    query: trimmed,
+    keys: [row.updated_at, row.id],
+  }));
+  return { ...slice, items: slice.items.map(toSearchResult) };
 }
 
 function toSearchResult(row: SearchRow): SearchResult {
@@ -637,7 +785,31 @@ function toSearchResult(row: SearchRow): SearchResult {
     title: row.title,
     excerpt: excerptFromMarkdown(row.excerpt ?? ''),
     updatedAt: row.updated_at,
+    updatedBy: row.updated_by ?? null,
+    updatedByName: row.updated_by_name ?? '',
   };
+}
+
+function editorStatement(
+  db: D1Database,
+  pageId: string,
+  actorId: string | null,
+  timestamp: number,
+  changedMarkdown?: string,
+): D1PreparedStatement {
+  // A snapshot or alarm with unchanged content must not replace a later rename's editor.
+  const condition =
+    changedMarkdown === undefined
+      ? ''
+      : 'WHERE NOT EXISTS (SELECT 1 FROM page_body WHERE page_id = ? AND markdown = ?)';
+  const args =
+    changedMarkdown === undefined
+      ? [pageId, actorId, timestamp]
+      : [pageId, actorId, timestamp, pageId, changedMarkdown];
+  return db
+    .prepare(`INSERT INTO page_last_editor (page_id, author_id, edited_at) SELECT ?, ?, ? ${condition}
+    ON CONFLICT(page_id) DO UPDATE SET author_id = excluded.author_id, edited_at = excluded.edited_at`)
+    .bind(...args);
 }
 
 export async function recordAudit(

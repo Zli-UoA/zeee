@@ -25,7 +25,7 @@ export const PATCH = defineHandler(async (c) => {
   const pageId = pathParam(c, 'id');
   const page = await getPage(env.DB, pageId);
   if (!page) return jsonError(c, 404, 'page not found');
-  await updatePageTitle(env.DB, pageId, title, page.title);
+  await updatePageTitle(env.DB, pageId, title, page.title, user.id);
   await recordAudit(env.DB, user.id, 'page.rename', 'page', pageId);
   return { ok: true };
 });

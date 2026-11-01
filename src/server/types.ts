@@ -6,8 +6,6 @@ export type Env = {
   PUBLIC_ORIGIN?: string;
 };
 
-export const PAGE_LIST_LIMIT = 200;
-
 export type PageSort = 'updated' | 'created' | 'title';
 
 export type SessionUser = {
@@ -23,11 +21,30 @@ export type LinkTarget = {
   aliases: string[];
 };
 
+export type PageNavigation = {
+  id: string;
+  title: string;
+  updatedAt: number;
+};
+
+export type PageSlice<T> = {
+  items: T[];
+  nextCursor: string | null;
+  limit: number;
+};
+
+export type PaginationOptions = {
+  cursor?: string | null;
+  limit?: number;
+};
+
 export type PageSummary = {
   id: string;
   title: string;
   createdAt: number;
   createdByName: string;
+  updatedBy: string | null;
+  updatedByName: string;
   excerpt: string;
   updatedAt: number;
 };
@@ -52,6 +69,8 @@ export type RevisionRecord = {
 };
 
 export type SearchResult = {
+  updatedBy: string | null;
+  updatedByName: string;
   id: string;
   title: string;
   excerpt: string;

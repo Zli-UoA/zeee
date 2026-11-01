@@ -5,17 +5,28 @@ import {
   listPages,
   recordAudit,
   searchPages,
-  sortPageSummaries,
+  listPageNavigation,
 } from '../src/server/db';
-import { redirectTo, sameOrigin } from '../src/server/http';
+import { jsonError, redirectTo, sameOrigin } from '../src/server/http';
 import { readRecentPages } from '../src/server/recent';
 import type { RecentPage } from '../src/shared/recent';
-import type { Env, PageSort, PageSummary, SearchResult, SessionUser } from '../src/server/types';
+import { PaginationError, parsePagination, parsePageSort } from '../src/server/pagination';
+import type {
+  PageNavigation,
+  Env,
+  PageSort,
+  PageSummary,
+  SearchResult,
+  SessionUser,
+} from '../src/server/types';
 
 export type Props = {
   user: SessionUser | null;
   pages: PageSummary[];
-  sidebarPages: PageSummary[];
+  sidebarPages: PageNavigation[];
+  nextCursor: string | null;
+  cursor: string | null;
+  limit: number;
   recentPages: RecentPage[];
   query: string;
   sort: PageSort;
@@ -28,17 +39,15 @@ export const head = defineHead<Props>((_c, props) => ({
   title: props.query ? '検索結果' : 'ページ',
 }));
 
-function parseSort(value: string | null): PageSort {
-  if (value === 'created' || value === 'title') return value;
-  return 'updated';
-}
-
-export const loader = defineHandler(async (c): Promise<Props> => {
+export const loader = defineHandler(async (c): Promise<Props | Response> => {
   const user = await getSessionUser(c);
   if (!user) {
     return {
       user: null,
       pages: [],
+      nextCursor: null,
+      cursor: null,
+      limit: 50,
       sidebarPages: [],
       recentPages: [],
       query: '',
@@ -52,20 +61,31 @@ export const loader = defineHandler(async (c): Promise<Props> => {
   const env = c.env as Env;
   const url = new URL(c.req.url);
   const query = (url.searchParams.get('q') ?? '').trim();
-  const sort = parseSort(url.searchParams.get('sort'));
-  const sidebarPages = await listPages(env.DB);
-  const pages = sortPageSummaries(sidebarPages, sort);
-  return {
-    user,
-    pages,
-    sidebarPages,
-    recentPages: readRecentPages(c, sidebarPages, user.id),
-    query,
-    sort,
-    results: query ? await searchPages(env.DB, query) : [],
-    now: Date.now(),
-    loginUrl: loginPath(c, '/'),
-  };
+  try {
+    const sort = parsePageSort(url.searchParams.get('sort'));
+    const options = parsePagination(url.searchParams);
+    const [sidebarPages, slice] = await Promise.all([
+      listPageNavigation(env.DB),
+      query ? searchPages(env.DB, query, options) : listPages(env.DB, { ...options, sort }),
+    ]);
+    return {
+      user,
+      pages: query ? [] : (slice.items as PageSummary[]),
+      sidebarPages,
+      recentPages: readRecentPages(c, sidebarPages, user.id),
+      query,
+      sort,
+      results: query ? (slice.items as SearchResult[]) : [],
+      nextCursor: slice.nextCursor,
+      cursor: options.cursor ?? null,
+      limit: slice.limit,
+      now: Date.now(),
+      loginUrl: loginPath(c, '/'),
+    };
+  } catch (error) {
+    if (error instanceof PaginationError) return jsonError(c, 400, error.message);
+    throw error;
+  }
 });
 
 export const action = defineHandler(async (c) => {

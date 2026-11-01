@@ -39,7 +39,7 @@ import {
   type ConnectionStatus,
   type SaveStatus,
 } from '../client/provider';
-import type { PageRecord, PageSummary, RevisionRecord, SessionUser } from '../server/types';
+import type { PageRecord, PageNavigation, RevisionRecord, SessionUser } from '../server/types';
 import {
   filterWikiCompletions,
   findWikiCompletionContext,
@@ -55,7 +55,7 @@ type Props = {
   page: PageRecord;
   user: SessionUser;
   revisions: RevisionRecord[];
-  pages: PageSummary[];
+  pages: PageNavigation[];
   linkTargets?: LinkTarget[];
 };
 
