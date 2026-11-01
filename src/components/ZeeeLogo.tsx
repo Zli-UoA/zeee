@@ -5,7 +5,7 @@ type Props = {
 export function ZeeeLogo({ className }: Props) {
   return (
     <svg
-      viewBox="0 0 339 92"
+      viewBox="0 0 339 94"
       fill="none"
       xmlns="http://www.w3.org/2000/svg"
       className={className}
@@ -13,7 +13,7 @@ export function ZeeeLogo({ className }: Props) {
       focusable="false"
     >
       <path
-        d="M153 81H103V68.9179L135.215 24.0821H103.873V12H152.127V24.0821L119.958 68.9179H153V81Z"
+        d="M153 81H103V68.9179L133.5 24.0821H103.873V12H152.127V24.0821L121.5 68.9179H153V81Z"
         fill="currentColor"
       />
       <path
@@ -28,12 +28,8 @@ export function ZeeeLogo({ className }: Props) {
         d="M339 81H289V12H339V23.9877H307.409V39.1375H336.803V51.1252H307.409V68.9179H339V81Z"
         fill="currentColor"
       />
-      <rect
-        y="45.9619"
-        width="65"
-        height="65"
-        rx="5"
-        transform="rotate(-45 0 45.9619)"
+      <path
+        d="M45.7721 2.71542C46.5819 1.47353 48.4196 1.47353 49.2294 2.71542C60.4264 19.887 75.1133 34.5748 92.2846 45.7721C93.5265 46.5819 93.5265 48.4195 92.2846 49.2294C75.1136 60.4264 60.4264 75.1136 49.2294 92.2846C48.4195 93.5265 46.5819 93.5265 45.7721 92.2846C34.5748 75.1133 19.8869 60.4264 2.71542 49.2294C1.47353 48.4196 1.47353 46.5819 2.71542 45.7721C19.8872 34.5748 34.5748 19.8872 45.7721 2.71542Z"
         fill="currentColor"
       />
     </svg>
