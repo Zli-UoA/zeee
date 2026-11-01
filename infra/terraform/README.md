@@ -91,11 +91,11 @@ tofu apply
 `zeee-fleet` は 2026-10-30 に手で作ったバケットです。[`r2.tf`](r2.tf) の `import` ブロックで取り込みます。
 provider v5 の import ID は `<account_id>/<bucket_name>/<jurisdiction>` で、jurisdiction は `default` です。
 
-1. 上の環境変数を設定して `tofu init` します。
-2. `tofu plan` で `1 to import, 0 to add, 0 to change, 0 to destroy` になることを確認します。
-   変更や再作成が出たら apply せず、`r2.tf` を実際の設定に合わせます（`location` は大文字の `APAC` で一致します）。
-3. `tofu apply` で state に取り込みます。
-4. もう一度 `tofu plan` して `No changes.` になることを確認します。
+1. 下の GitHub Secrets を登録します。
+2. PR の plan コメント（または手元の `tofu plan`）が `1 to import, 0 to add, 0 to change, 0 to destroy` になることを確認します。
+   変更や再作成が出たらマージせず、`r2.tf` を実際の設定に合わせます（`location` は大文字の `APAC` で一致します）。
+3. マージすると CI が apply し、state に取り込みます。Actions の Apply ジョブが成功したことを確認します。
+4. 次に `infra/terraform/` を変更する PR の plan コメント（または手元の `tofu plan`）が `No changes.` になれば完了です。
 
 取り込み後も `import` ブロックは残して構いません（state にあるリソースには何もしません）。
 
@@ -149,10 +149,14 @@ state には PBKDF2 のメタデータが `encrypted_metadata_alias`（今は `z
 
 ## GitHub Actions
 
-`.github/workflows/terraform-r2.yaml` で次を実行します。apply は CI では行いません。
+`.github/workflows/terraform-r2.yaml` で次を実行します。
 
 - `infra/terraform/**` の変更時: `tofu fmt -check`、`tofu init -backend=false`、`tofu validate`
-- 下記 Secrets がすべてあるときだけ: backend 付きの `tofu plan`（fork PR などでは skip）
+- PR: backend 付きの `tofu plan` を実行し、結果を PR にコメントします。push のたびに同じコメントを書き換えます。下記 Secrets が無いとき（fork PR など）は skip します。
+- `main` へのマージ: main でもう一度 plan してから `tofu apply` します。PR のコメント後に main が進んでいれば、apply の内容はコメントと異なることがあります。結果は Actions のログで確認します。
+- apply は順番に実行し、途中で取り消しません。Secrets が無いと失敗します。Secrets を登録した後、Actions から main で手動実行（workflow_dispatch）すると apply できます。
+
+Secrets はリポジトリの Secrets なので、書き込み権限があればどのブランチのワークフローからでも読み出せます。`CLOUDFLARE_API_TOKEN` は Workers R2 Storage の Edit 権限だけにしてください。
 
 | Secret                                                          | 内容                                         |
 | --------------------------------------------------------------- | -------------------------------------------- |
