@@ -136,12 +136,10 @@ export function Editor({ page, user, revisions, pages, linkTargets }: Props) {
 
     void (async () => {
       try {
-        const response = await fetch(`/api/pages/${page.id}/state`);
-        if (response.ok) {
+        const response = await fetch(`/api/pages/${page.id}/state`).catch(() => null);
+        if (response?.ok) {
           Y.applyUpdate(doc, new Uint8Array(await response.arrayBuffer()));
         }
-        const seed = text.length === 0 && page.markdown.length > 0;
-        if (seed) text.insert(0, page.markdown);
         if (cancelled) {
           doc.destroy();
           return;
@@ -159,12 +157,17 @@ export function Editor({ page, user, revisions, pages, linkTargets }: Props) {
           page.id,
           doc,
           awareness,
-          seed,
+          response?.ok ? page.markdown : false,
           setStatus,
           setUsers,
           setSaveStatus,
+          user.id,
         );
         providerRef.current = provider;
+        await provider.ready;
+        if (cancelled) return;
+        undoManager.clear();
+        setMarkdown(text.toJSON());
         setCollaboration({ text, awareness, undoManager });
       } catch (loadError) {
         setError(loadError instanceof Error ? loadError.message : '本文を読み込めませんでした');
@@ -186,7 +189,7 @@ export function Editor({ page, user, revisions, pages, linkTargets }: Props) {
       doc.destroy();
       setCollaboration(null);
     };
-  }, [page.id]);
+  }, [page.id, user.id]);
 
   useEffect(() => {
     const start = () => {
@@ -204,14 +207,14 @@ export function Editor({ page, user, revisions, pages, linkTargets }: Props) {
   }, []);
 
   useEffect(() => {
-    if (title === savedTitle) return;
+    if (title === savedTitle && saveStatus.pending === 0 && saveStatus.state !== 'failed') return;
     const handleBeforeUnload = (event: BeforeUnloadEvent) => {
       event.preventDefault();
       event.returnValue = '';
     };
     window.addEventListener('beforeunload', handleBeforeUnload);
     return () => window.removeEventListener('beforeunload', handleBeforeUnload);
-  }, [title, savedTitle]);
+  }, [title, savedTitle, saveStatus.pending, saveStatus.state]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -685,7 +688,7 @@ function saveStatusDisplay(connection: ConnectionStatus, save: SaveStatus): Save
     return {
       label: '保存失敗',
       variant: 'error',
-      title: 'サーバーに保存できませんでした。再試行してください。',
+      title: 'この端末またはサーバーに保存できませんでした。タブを閉じずに再試行してください。',
     };
   }
   if (save.state === 'unsent') {
