@@ -26,7 +26,7 @@ zeee が使う Cloudflare R2 バケットを OpenTofu でコード管理しま�
 | 暗号化   | pbkdf2 + AES-GCM。state と plan の両方で必須（`enforced = true`）        |
 
 暗号化の passphrase は [`state-passphrase.sops.yaml`](state-passphrase.sops.yaml) に sops + age で暗号化して置いています。zoo2 や zoo2-infra とは別の値です。
-passphrase を失うと state を復号できなくなります。値を変える場合は OpenTofu の `fallback` を使って state を再暗号化してから差し替えます。
+passphrase を失うと state を復号できなくなります。値を入れ替えるときは、下の「passphrase の入れ替え」の手順で state を再暗号化します。
 
 ## 必要な環境変数
 
@@ -98,6 +98,54 @@ provider v5 の import ID は `<account_id>/<bucket_name>/<jurisdiction>` で、
 4. もう一度 `tofu plan` して `No changes.` になることを確認します。
 
 取り込み後も `import` ブロックは残して構いません（state にあるリソースには何もしません）。
+
+## passphrase の入れ替え
+
+state には PBKDF2 のメタデータが `encrypted_metadata_alias`（今は `zeee-v1`）の名前で保存されています。
+旧値の key provider には必ず今の alias を、新しい値には別の alias を付けます。同じ alias を両方に付けると失敗します。
+
+1. 新しい値を `state-passphrase.sops.yaml` に保存してコミットします（旧値は手元に控えておきます）。
+
+   ```sh
+   export TF_VAR_old_state_passphrase="$(sops decrypt --extract '["passphrase"]' state-passphrase.sops.yaml)"
+   sops set state-passphrase.sops.yaml '["passphrase"]' "\"$(openssl rand -base64 48 | tr -d '\n')\""
+   export TF_VAR_state_passphrase="$(sops decrypt --extract '["passphrase"]' state-passphrase.sops.yaml)"
+   ```
+
+2. `versions.tf` の `encryption` を一時的に次の形にします。旧値は `old` provider（alias `zeee-v1`）として state の `fallback` に、新しい値は `passphrase` provider（alias `zeee-v2`）として primary にします。
+   `variables.tf` にも `old_state_passphrase`（`sensitive = true`）を一時的に足します。
+
+   ```hcl
+   key_provider "pbkdf2" "old" {
+     passphrase               = var.old_state_passphrase
+     encrypted_metadata_alias = "zeee-v1"
+   }
+
+   key_provider "pbkdf2" "passphrase" {
+     passphrase               = var.state_passphrase
+     encrypted_metadata_alias = "zeee-v2"
+   }
+
+   method "aes_gcm" "old" {
+     keys = key_provider.pbkdf2.old
+   }
+
+   method "aes_gcm" "state" {
+     keys = key_provider.pbkdf2.passphrase
+   }
+
+   state {
+     method   = method.aes_gcm.state
+     enforced = true
+     fallback {
+       method = method.aes_gcm.old
+     }
+   }
+   ```
+
+3. `tofu apply` します。リソースに差分が無くても、state は新しい値で書き直されます。
+4. `old` provider・`old` method・`fallback`・`old_state_passphrase` を外し、`tofu plan` が新しい値だけで通ることを確認してからコミットします。
+5. GitHub Secret `TF_STATE_PASSPHRASE` を新しい値に更新します。
 
 ## GitHub Actions
 

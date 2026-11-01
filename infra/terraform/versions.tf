@@ -28,12 +28,16 @@ terraform {
 
   # state と plan は passphrase で暗号化します（state-passphrase.sops.yaml、README 参照）。
   encryption {
-    key_provider "pbkdf2" "state" {
+    key_provider "pbkdf2" "passphrase" {
       passphrase = var.state_passphrase
+      # state には PBKDF2 のメタデータがこの名前で保存されます。既定の provider 名だと、
+      # passphrase の入れ替え時に旧値の provider を改名すると既存 state を読めなくなるため固定します。
+      # 入れ替えるときは新しい値に別の alias（zeee-v2 など）を付けます（README 参照）。
+      encrypted_metadata_alias = "zeee-v1"
     }
 
     method "aes_gcm" "state" {
-      keys = key_provider.pbkdf2.state
+      keys = key_provider.pbkdf2.passphrase
     }
 
     state {
