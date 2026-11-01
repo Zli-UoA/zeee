@@ -19,7 +19,7 @@ zeee が使う Cloudflare R2 バケットを OpenTofu でコード管理しま�
 
 | 項目     | 値                                                                       |
 | -------- | ------------------------------------------------------------------------ |
-| バケット | `zoo-terraform-state`（Zli-UoA の共有 state バケット。この構成の管理外） |
+| バケット | `zcp-terraform-state`（Zli-UoA の共有 state バケット。この構成の管理外） |
 | key      | `zeee/r2.tfstate`                                                        |
 | endpoint | `https://c9918f2caa050736a07867e6f968c0a2.r2.cloudflarestorage.com`      |
 | ロック   | `use_lockfile = true`（同じバケットに `.tflock` を置く）                 |
@@ -33,7 +33,7 @@ passphrase を失うと state を復号できなくなります。値を入れ�
 | 変数                                          | 内容                                                                 |
 | --------------------------------------------- | -------------------------------------------------------------------- |
 | `TF_VAR_cloudflare_api_token`                 | Cloudflare API トークン（`Account` > `Workers R2 Storage` > `Edit`） |
-| `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | `zoo-terraform-state` を読み書きできる R2 の S3 API トークン         |
+| `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | `zcp-terraform-state` を読み書きできる R2 の S3 API トークン         |
 | `TF_VAR_state_passphrase`                     | state の暗号化 passphrase（下記の手順で sops から取り出す）          |
 
 `TF_VAR_cloudflare_account_id` は既定値（`c9918f2caa050736a07867e6f968c0a2`）があるので不要です。
