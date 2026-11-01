@@ -40,17 +40,24 @@ passphrase を失うと state を復号できなくなります。値を変え�
 
 ## age 鍵の登録（plan / apply する人は最初に一度）
 
-OpenTofu で plan / apply するには passphrase の復号が必要で、そのためにはあなたの age 公開鍵が [`.sops.yaml`](../../.sops.yaml) に登録されている必要があります。
+OpenTofu で plan / apply するには passphrase の復号が必要で、そのためにはあなたの公開鍵（age 鍵、無ければ SSH の ed25519 鍵）が [`.sops.yaml`](../../.sops.yaml) に登録されている必要があります。
 
-1. 自分の鍵を作ります（zoo2-infra で作った鍵があればそれを使えます）。
+1. 自分の鍵を用意します。age 鍵（zoo2-infra で作った鍵があればそれを使えます）を作るか、既存の SSH ed25519 鍵を使います。
 
    ```sh
+   # age 鍵
    mkdir -p ~/.config/sops/age
    age-keygen -o ~/.config/sops/age/keys.txt
    age-keygen -y ~/.config/sops/age/keys.txt   # 公開鍵（age1…）
+
+   # age 鍵が無ければ SSH ed25519 鍵の公開鍵
+   cat ~/.ssh/id_ed25519.pub                   # ssh-ed25519 AAAA…
    ```
 
-2. 公開鍵を `.sops.yaml` の `age:` に追加する PR を出します。秘密鍵（`AGE-SECRET-KEY-1…`）は Git・Issue・チャットに貼りません。
+   SSH 鍵の場合、復号時は sops が `~/.ssh/id_ed25519` を使います。別の場所なら `SOPS_AGE_SSH_PRIVATE_KEY_FILE` で指定します。
+   パスフレーズ付きの SSH 鍵は端末が無いと復号できないため、CI などの非対話環境では使えません。
+
+2. 公開鍵（`age1…` または `ssh-ed25519 AAAA…` の行そのまま）を `.sops.yaml` の `age:` に追加する PR を出します。秘密鍵は Git・Issue・チャットに貼りません。
 3. 既存のメンバーがその PR のブランチで再暗号化し、コミットしてからマージします。
 
    ```sh
