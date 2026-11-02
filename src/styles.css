@@ -23,6 +23,35 @@ body {
   background: color-mix(in oklab, var(--color-kumo-brand) 25%, transparent);
 }
 
+@media (min-width: 48rem) {
+  .zeee-app-shell aside[data-sidebar='sidebar'] {
+    width: 0 !important;
+    min-width: 0;
+  }
+
+  .zeee-app-shell [data-sidebar='content-container'] {
+    position: fixed;
+    top: 3.5rem;
+    right: auto;
+    bottom: 0;
+    width: var(--sidebar-width) !important;
+    height: auto;
+    z-index: 20;
+    border-right: 1px solid var(--color-kumo-line);
+    transform: translateX(-100%);
+    transition: transform var(--sidebar-animation-duration) var(--sidebar-easing);
+    will-change: transform;
+  }
+
+  .zeee-app-shell [data-state='expanded'] [data-sidebar='content-container'] {
+    transform: translateX(0);
+  }
+
+  .zeee-app-shell [data-state='collapsed'] [data-sidebar='content-container'] {
+    transform: translateX(-100%);
+  }
+}
+
 .cm-editor {
   height: 100%;
   background: transparent;

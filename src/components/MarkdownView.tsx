@@ -15,7 +15,7 @@ import remarkGfm from 'remark-gfm';
 import rehypeSanitize, { defaultSchema } from 'rehype-sanitize';
 import rehypeHighlight from 'rehype-highlight';
 import { Badge, Button, Text } from '@cloudflare/kumo';
-import { CheckIcon, CopyIcon } from '@phosphor-icons/react';
+import { CheckIcon, CopyIcon, XIcon } from '@phosphor-icons/react';
 import { createPageByPath } from '../client/pagePathApi';
 import type { Backlink } from '../server/backlinks';
 import type { PageNavigation } from '../server/types';
@@ -38,6 +38,7 @@ type Props = {
   pageTitle: string;
   sidePanel?: boolean;
   sidePanelOpen: boolean;
+  onSidePanelOpenChange?: (open: boolean) => void;
   onSidePanelInfoChange?: (info: SidePanelInfo) => void;
 };
 
@@ -66,9 +67,12 @@ export function MarkdownView({
   pageTitle,
   sidePanel = true,
   sidePanelOpen,
+  onSidePanelOpenChange,
   onSidePanelInfoChange,
 }: Props) {
   const articleRef = useRef<HTMLElement>(null);
+  const tocTabRef = useRef<HTMLButtonElement>(null);
+  const tocCloseRef = useRef<HTMLButtonElement>(null);
   const [toc, setToc] = useState<TocItem[]>([]);
   const [backlinks, setBacklinks] = useState<Backlink[] | null>(null);
   const [backlinksError, setBacklinksError] = useState(false);
@@ -189,6 +193,17 @@ export function MarkdownView({
   const panelAvailable = sidePanel && hasSidePanelContent;
   const showSidePanel = panelAvailable && sidePanelOpen;
   const wideProse = panelAvailable && !sidePanelOpen;
+  const panelLabel = hasToc ? '目次' : 'バックリンク';
+
+  function openSidePanel() {
+    onSidePanelOpenChange?.(true);
+    requestAnimationFrame(() => tocCloseRef.current?.focus());
+  }
+
+  function closeSidePanel() {
+    onSidePanelOpenChange?.(false);
+    requestAnimationFrame(() => tocTabRef.current?.focus());
+  }
 
   useEffect(() => {
     onSidePanelInfoChange?.({
@@ -199,14 +214,92 @@ export function MarkdownView({
   }, [hasSidePanelContent, hasToc, hasBacklinks, backlinksError, onSidePanelInfoChange]);
 
   return (
-    <div className="min-h-[60svh] px-5 py-7 sm:px-8 sm:py-9 lg:min-h-[calc(100vh-18rem)]">
+    <div className="relative min-h-[60svh] px-5 py-7 sm:px-8 sm:py-9 lg:min-h-[calc(100vh-18rem)]">
+      {panelAvailable && !sidePanelOpen ? (
+        <button
+          ref={tocTabRef}
+          type="button"
+          onClick={openSidePanel}
+          aria-label={`${panelLabel}を開く`}
+          aria-expanded={false}
+          aria-controls="page-side-panel"
+          title={`${panelLabel}を開く`}
+          className="absolute top-28 left-0 z-10 hidden w-6 items-center justify-center rounded-r-md border border-l-0 border-kumo-line bg-kumo-base py-3 text-[11px] font-medium text-kumo-subtle hover:bg-kumo-tint hover:text-kumo-default focus-visible:ring-2 focus-visible:ring-kumo-brand focus-visible:outline-none xl:flex"
+          style={{ writingMode: 'vertical-rl' }}
+        >
+          {panelLabel}
+        </button>
+      ) : null}
+
       <div
         className={
           showSidePanel
-            ? 'xl:grid xl:grid-cols-[minmax(0,36.5rem)_13rem] xl:items-start xl:gap-10'
+            ? 'xl:grid xl:grid-cols-[13rem_minmax(0,36.5rem)] xl:items-start xl:gap-10'
             : undefined
         }
       >
+        {panelAvailable ? (
+          <aside
+            id="page-side-panel"
+            className={showSidePanel ? 'hidden self-start xl:sticky xl:top-20 xl:block' : 'hidden'}
+            aria-hidden={!showSidePanel}
+          >
+            <div className="mb-3 flex items-center justify-between gap-2">
+              <Text as="h2" variant="heading">
+                {panelLabel}
+              </Text>
+              <Button
+                ref={tocCloseRef}
+                type="button"
+                variant="ghost"
+                shape="square"
+                aria-label={`${panelLabel}を閉じる`}
+                aria-controls="page-side-panel"
+                aria-expanded={true}
+                onClick={closeSidePanel}
+              >
+                <XIcon size={16} />
+              </Button>
+            </div>
+
+            {hasToc ? (
+              <section aria-label="目次">
+                <TocNav items={toc} />
+              </section>
+            ) : null}
+
+            {hasBacklinks || backlinksError ? (
+              <section aria-label="バックリンク" className={hasToc ? 'mt-6' : undefined}>
+                {hasToc ? (
+                  <div className="mb-2 flex items-center gap-2">
+                    <h2 className="text-sm font-semibold text-kumo-subtle">バックリンク</h2>
+                    {hasBacklinks ? <Badge variant="outline">{backlinks?.length}</Badge> : null}
+                  </div>
+                ) : null}
+                {backlinksError ? (
+                  <div className="flex flex-col items-start gap-2">
+                    <Text variant="error" size="sm">
+                      読み込めませんでした
+                    </Text>
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      onClick={() => {
+                        setBacklinksError(false);
+                        setBacklinksRetry((value) => value + 1);
+                      }}
+                    >
+                      再試行
+                    </Button>
+                  </div>
+                ) : (
+                  <BacklinkList backlinks={backlinks} />
+                )}
+              </section>
+            ) : null}
+          </aside>
+        ) : null}
+
         <div className={wideProse ? 'min-w-0 max-w-[52rem]' : 'min-w-0'}>
           {showMobileToc ? (
             <details className="mb-5 border-b border-kumo-line pb-3 xl:hidden">
@@ -263,45 +356,6 @@ export function MarkdownView({
             </div>
           ) : null}
         </div>
-
-        {showSidePanel ? (
-          <aside id="page-side-panel" className="hidden self-start xl:sticky xl:top-20 xl:block">
-            {hasToc ? (
-              <section aria-label="目次" className="mb-6">
-                <h2 className="mb-2 text-sm font-semibold text-kumo-subtle">目次</h2>
-                <TocNav items={toc} />
-              </section>
-            ) : null}
-
-            {hasBacklinks || backlinksError ? (
-              <section aria-label="バックリンク">
-                <div className="mb-2 flex items-center gap-2">
-                  <h2 className="text-sm font-semibold text-kumo-subtle">バックリンク</h2>
-                  {hasBacklinks ? <Badge variant="outline">{backlinks?.length}</Badge> : null}
-                </div>
-                {backlinksError ? (
-                  <div className="flex flex-col items-start gap-2">
-                    <Text variant="error" size="sm">
-                      読み込めませんでした
-                    </Text>
-                    <Button
-                      type="button"
-                      variant="secondary"
-                      onClick={() => {
-                        setBacklinksError(false);
-                        setBacklinksRetry((value) => value + 1);
-                      }}
-                    >
-                      再試行
-                    </Button>
-                  </div>
-                ) : (
-                  <BacklinkList backlinks={backlinks} />
-                )}
-              </section>
-            ) : null}
-          </aside>
-        ) : null}
       </div>
 
       {backlinksError && !showSidePanel ? (

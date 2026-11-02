@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import type * as Y from 'yjs';
 import type { Awareness } from 'y-protocols/awareness';
 import { useRouter } from '@void/react';
@@ -10,7 +10,6 @@ import {
   DotsThreeIcon,
   EyeIcon,
   FloppyDiskIcon,
-  ListBulletsIcon,
   PencilSimpleIcon,
   TrashIcon,
   XIcon,
@@ -23,7 +22,6 @@ import { formatDate } from '../shared/format';
 import { pagePathName, validatePagePath } from '../shared/pagePath';
 import { PagePathInput } from './PagePathInput';
 import { RevisionPreview } from './RevisionPreview';
-import type { SidePanelInfo } from './MarkdownView';
 
 const CodeEditor = lazy(() => import('./CodeEditor'));
 const MarkdownView = lazy(() =>
@@ -34,6 +32,8 @@ const editorClassName =
   'min-h-[calc(60svh-3.5rem)] w-full flex-1 lg:min-h-[calc(100vh-18rem-4.5rem)]';
 
 const SIDE_PANEL_STORAGE_KEY = 'zeee.read-side-panel.v1';
+const FOCUSABLE_SELECTOR =
+  'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
 type Props = {
   page: PageRecord;
@@ -53,7 +53,9 @@ type Mode = 'read' | 'edit';
 
 export function Editor({ page, user, revisions, pages, linkTargets }: Props) {
   const router = useRouter();
-  const historyRef = useRef<HTMLDivElement>(null);
+  const historyPanelRef = useRef<HTMLElement>(null);
+  const historyTriggerRef = useRef<HTMLButtonElement>(null);
+  const historyWasOpenRef = useRef(false);
   const renderTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const providerRef = useRef<ZeeeProvider | null>(null);
   const composingRef = useRef(false);
@@ -70,12 +72,8 @@ export function Editor({ page, user, revisions, pages, linkTargets }: Props) {
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleteError, setDeleteError] = useState('');
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [historyModal, setHistoryModal] = useState(false);
   const [sidePanelOpen, setSidePanelOpen] = useState(true);
-  const [sidePanelInfo, setSidePanelInfo] = useState<SidePanelInfo>({
-    available: false,
-    hasToc: false,
-    hasBacklinks: false,
-  });
   const sidePanelRestoredRef = useRef(false);
   const lastSidePanelOpenRef = useRef(sidePanelOpen);
   const [previewRevision, setPreviewRevision] = useState<RevisionRecord | null>(null);
@@ -223,16 +221,6 @@ export function Editor({ page, user, revisions, pages, linkTargets }: Props) {
     }
   }, [sidePanelOpen]);
 
-  const handleSidePanelInfoChange = useCallback((next: SidePanelInfo) => {
-    setSidePanelInfo((current) =>
-      current.available === next.available &&
-      current.hasToc === next.hasToc &&
-      current.hasBacklinks === next.hasBacklinks
-        ? current
-        : next,
-    );
-  }, []);
-
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.isComposing || event.keyCode === 229 || composingRef.current) return;
@@ -262,16 +250,75 @@ export function Editor({ page, user, revisions, pages, linkTargets }: Props) {
   }, [mode, collaboration, markdown, busy]);
 
   useEffect(() => {
-    if (!historyOpen) return;
-    if (window.matchMedia('(max-width: 1279px)').matches) {
-      historyRef.current?.scrollIntoView({
-        behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches
-          ? 'instant'
-          : 'smooth',
-        block: 'start',
-      });
+    const query = window.matchMedia('(max-width: 1279px)');
+    const update = () => setHistoryModal(query.matches);
+    update();
+    query.addEventListener('change', update);
+    return () => query.removeEventListener('change', update);
+  }, []);
+
+  useEffect(() => {
+    if (historyOpen) {
+      historyWasOpenRef.current = true;
+      if (historyModal) {
+        const frame = requestAnimationFrame(() => {
+          const panel = historyPanelRef.current;
+          const first = panel?.querySelector<HTMLElement>(FOCUSABLE_SELECTOR);
+          (first ?? panel)?.focus();
+        });
+        return () => cancelAnimationFrame(frame);
+      }
+      return;
     }
-  }, [historyOpen]);
+    if (historyWasOpenRef.current) {
+      historyWasOpenRef.current = false;
+      historyTriggerRef.current?.focus();
+    }
+  }, [historyOpen, historyModal]);
+
+  useEffect(() => {
+    if (!historyOpen) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || previewRevision || deleteOpen) return;
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        setHistoryOpen(false);
+        return;
+      }
+      if (!historyModal || event.key !== 'Tab') return;
+      const panel = historyPanelRef.current;
+      if (!panel) return;
+      const focusables = Array.from(panel.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR));
+      if (!focusables.length) {
+        event.preventDefault();
+        panel.focus();
+        return;
+      }
+      const first = focusables[0];
+      const last = focusables[focusables.length - 1];
+      const active = document.activeElement;
+      if (event.shiftKey) {
+        if (active === first || !panel.contains(active)) {
+          event.preventDefault();
+          last.focus();
+        }
+      } else if (active === last || !panel.contains(active)) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [historyOpen, historyModal, previewRevision, deleteOpen]);
+
+  useEffect(() => {
+    if (!historyOpen || !historyModal) return;
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = previous;
+    };
+  }, [historyOpen, historyModal]);
 
   function toggleMode() {
     if (mode === 'read') {
@@ -378,21 +425,10 @@ export function Editor({ page, user, revisions, pages, linkTargets }: Props) {
   }
 
   const others = users.filter((item) => item.name !== user.displayName);
-  const sidePanelToggleLabel = sidePanelInfo.hasToc ? '目次' : 'バックリンク';
-  const sidePanelActionLabel = sidePanelInfo.hasToc
-    ? sidePanelInfo.hasBacklinks
-      ? '目次とバックリンク'
-      : '目次'
-    : 'バックリンク';
-  const showSidePanelToggle = mode === 'read' && !historyOpen && sidePanelInfo.available;
 
   return (
     <div className="flex w-full flex-col gap-4">
-      <div
-        className={
-          historyOpen ? 'flex flex-col gap-3 xl:pe-[calc(280px+1rem)]' : 'flex flex-col gap-3'
-        }
-      >
+      <div className="flex flex-col gap-3">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
           <div className="min-w-0 sm:flex-1">
             {mode === 'edit' ? (
@@ -452,26 +488,14 @@ export function Editor({ page, user, revisions, pages, linkTargets }: Props) {
               >
                 {mode === 'read' ? '編集' : '閲覧'}
               </Button>
-              {showSidePanelToggle ? (
-                <Button
-                  type="button"
-                  variant="secondary"
-                  icon={sidePanelOpen ? <XIcon size={15} /> : <ListBulletsIcon size={15} />}
-                  onClick={() => setSidePanelOpen((open) => !open)}
-                  aria-pressed={sidePanelOpen}
-                  aria-controls="page-side-panel"
-                  title={`${sidePanelActionLabel}を${sidePanelOpen ? '閉じる' : '開く'}`}
-                  className="hidden xl:inline-flex"
-                >
-                  {sidePanelToggleLabel}
-                </Button>
-              ) : null}
               <Button
+                ref={historyTriggerRef}
                 type="button"
                 variant="secondary"
                 icon={<ClockCounterClockwiseIcon size={15} />}
                 onClick={() => setHistoryOpen((open) => !open)}
-                aria-pressed={historyOpen}
+                aria-expanded={historyOpen}
+                aria-controls="page-history-panel"
               >
                 履歴
               </Button>
@@ -508,24 +532,14 @@ export function Editor({ page, user, revisions, pages, linkTargets }: Props) {
       </div>
 
       {error ? (
-        <div
-          className={historyOpen ? 'xl:pe-[calc(280px+1rem)]' : undefined}
-          role="alert"
-          aria-live="polite"
-        >
+        <div role="alert" aria-live="polite">
           <Text variant="error" size="sm">
             {error}
           </Text>
         </div>
       ) : null}
 
-      <div
-        className={
-          historyOpen
-            ? 'grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_280px]'
-            : 'grid grid-cols-1 gap-4'
-        }
-      >
+      <div>
         {mode === 'read' && !markdown.trim() ? (
           <Empty
             className="min-h-[60svh] justify-center lg:min-h-[calc(100vh-18rem)]"
@@ -560,9 +574,8 @@ export function Editor({ page, user, revisions, pages, linkTargets }: Props) {
                   linkTargets={targets}
                   pageId={page.id}
                   pageTitle={savedTitle}
-                  sidePanel={!historyOpen}
                   sidePanelOpen={sidePanelOpen}
-                  onSidePanelInfoChange={handleSidePanelInfoChange}
+                  onSidePanelOpenChange={setSidePanelOpen}
                 />
               </Suspense>
             ) : (
@@ -584,85 +597,104 @@ export function Editor({ page, user, revisions, pages, linkTargets }: Props) {
             )}
           </LayerCard>
         )}
-
-        {historyOpen ? (
-          <div ref={historyRef} className="scroll-mt-20 self-start xl:sticky xl:top-20">
-            <LayerCard className="overflow-hidden p-0">
-              <div className="xl:max-h-[calc(100vh-6rem)] xl:overflow-y-auto">
-                <div className="flex items-center justify-between px-3 pt-2">
-                  <div className="flex items-center gap-2">
-                    <Text variant="heading" as="h2">
-                      履歴
-                    </Text>
-                    <Badge variant="outline">{revisions.length}</Badge>
-                  </div>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    shape="square"
-                    aria-label="履歴を閉じる"
-                    onClick={() => setHistoryOpen(false)}
-                  >
-                    <XIcon size={16} />
-                  </Button>
-                </div>
-
-                <div className="border-b border-kumo-line p-3">
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    icon={<FloppyDiskIcon size={15} />}
-                    onClick={saveRevision}
-                    disabled={busy || restoreBusy}
-                    title="現在の版を保存（⌘S / Ctrl+S）"
-                    aria-keyshortcuts="Meta+S Control+S"
-                    className="w-full"
-                  >
-                    現在の版を保存
-                  </Button>
-                </div>
-
-                {revisions.length === 0 ? (
-                  <Empty
-                    size="sm"
-                    className="border-0 bg-transparent"
-                    icon={<ClockCounterClockwiseIcon size={28} />}
-                    title="履歴はまだありません"
-                    description="編集内容は自動で保存されます。"
-                  />
-                ) : (
-                  <ul className="divide-y divide-kumo-line">
-                    {revisions.map((revision) => (
-                      <li
-                        className="flex items-start justify-between gap-2 px-3 py-2"
-                        key={revision.id}
-                      >
-                        <div className="flex min-w-0 flex-col gap-0.5">
-                          <div className="flex items-center gap-1.5">
-                            <Text variant="mono">v{revision.version}</Text>
-                            {revision.manual ? <Badge variant="outline">手動</Badge> : null}
-                          </div>
-                          <Text variant="mono-secondary">{formatDate(revision.createdAt)}</Text>
-                        </div>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          icon={<ArrowCounterClockwiseIcon size={15} />}
-                          onClick={() => openRevisionPreview(revision)}
-                          disabled={busy || restoreBusy}
-                          aria-label={`v${revision.version} の内容を確認して戻す`}
-                        >
-                          戻す
-                        </Button>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-            </LayerCard>
-          </div>
-        ) : null}
       </div>
+
+      {historyOpen ? (
+        <>
+          {historyModal ? (
+            <div
+              className="fixed inset-0 z-40 bg-black/30"
+              aria-hidden="true"
+              onClick={() => setHistoryOpen(false)}
+            />
+          ) : null}
+          <aside
+            ref={historyPanelRef}
+            id="page-history-panel"
+            role={historyModal ? 'dialog' : undefined}
+            aria-modal={historyModal ? true : undefined}
+            aria-label="履歴"
+            tabIndex={-1}
+            className={
+              historyModal
+                ? 'fixed inset-y-0 right-0 z-50 flex w-[min(20rem,85vw)] flex-col border-l border-kumo-line bg-kumo-base shadow-2xl focus:outline-none'
+                : 'fixed top-36 right-0 bottom-0 z-20 hidden w-[280px] flex-col border-l border-kumo-line bg-kumo-base shadow-lg focus:outline-none xl:flex'
+            }
+          >
+            <div className="flex items-center justify-between gap-2 border-b border-kumo-line px-3 py-2">
+              <div className="flex items-center gap-2">
+                <Text variant="heading" as="h2">
+                  履歴
+                </Text>
+                <Badge variant="outline">{revisions.length}</Badge>
+              </div>
+              <Button
+                type="button"
+                variant="ghost"
+                shape="square"
+                aria-label="履歴を閉じる"
+                onClick={() => setHistoryOpen(false)}
+              >
+                <XIcon size={16} />
+              </Button>
+            </div>
+
+            <div className="border-b border-kumo-line p-3">
+              <Button
+                type="button"
+                variant="secondary"
+                icon={<FloppyDiskIcon size={15} />}
+                onClick={saveRevision}
+                disabled={busy || restoreBusy}
+                title="現在の版を保存（⌘S / Ctrl+S）"
+                aria-keyshortcuts="Meta+S Control+S"
+                className="w-full"
+              >
+                現在の版を保存
+              </Button>
+            </div>
+
+            <div className="min-h-0 flex-1 overflow-y-auto">
+              {revisions.length === 0 ? (
+                <Empty
+                  size="sm"
+                  className="border-0 bg-transparent"
+                  icon={<ClockCounterClockwiseIcon size={28} />}
+                  title="履歴はまだありません"
+                  description="編集内容は自動で保存されます。"
+                />
+              ) : (
+                <ul className="divide-y divide-kumo-line">
+                  {revisions.map((revision) => (
+                    <li
+                      className="flex items-start justify-between gap-2 px-3 py-2"
+                      key={revision.id}
+                    >
+                      <div className="flex min-w-0 flex-col gap-0.5">
+                        <div className="flex items-center gap-1.5">
+                          <Text variant="mono">v{revision.version}</Text>
+                          {revision.manual ? <Badge variant="outline">手動</Badge> : null}
+                        </div>
+                        <Text variant="mono-secondary">{formatDate(revision.createdAt)}</Text>
+                      </div>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        icon={<ArrowCounterClockwiseIcon size={15} />}
+                        onClick={() => openRevisionPreview(revision)}
+                        disabled={busy || restoreBusy}
+                        aria-label={`v${revision.version} の内容を確認して戻す`}
+                      >
+                        戻す
+                      </Button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </aside>
+        </>
+      ) : null}
 
       <LayerDialog.Root
         open={deleteOpen}

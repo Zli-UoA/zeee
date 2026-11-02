@@ -144,7 +144,7 @@ export function AppShell({
 
   return (
     <LinkProvider component={AppLink}>
-      <Sidebar.Provider collapsible="offcanvas" className="min-h-svh bg-kumo-canvas">
+      <Sidebar.Provider collapsible="offcanvas" className="zeee-app-shell min-h-svh bg-kumo-canvas">
         <SidebarPreference />
         <CloseMobileSidebarOnNavigate
           activePageId={activePageId}
@@ -158,9 +158,9 @@ export function AppShell({
           <header className="sticky top-0 z-30 h-14 border-b border-kumo-line bg-kumo-base/90 backdrop-blur">
             <div className="flex h-full w-full items-center gap-2 px-3 sm:px-4 lg:px-6">
               <div className="flex shrink-0 items-center gap-1.5">
-                <Brand />
                 <MobileNavButton />
                 <DesktopSidebarToggle />
+                <Brand />
               </div>
 
               <div
@@ -304,8 +304,8 @@ function AppSidebar({
   return (
     <Sidebar
       id="pages-nav"
-      className="md:sticky md:top-14 md:h-[calc(100svh-3.5rem)]"
       inert={!isMobile && !open ? true : undefined}
+      aria-hidden={!isMobile && !open ? true : undefined}
     >
       <Sidebar.Header className="h-14 justify-between px-3 md:hidden">
         <Brand />
