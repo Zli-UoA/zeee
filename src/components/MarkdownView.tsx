@@ -50,6 +50,8 @@ const sanitizeSchema = {
   },
 };
 
+const SIDE_PANEL_STORAGE_KEY = 'zeee.read-side-panel.v1';
+
 export function MarkdownView({
   markdown,
   pages,
@@ -69,6 +71,30 @@ export function MarkdownView({
     [linkTargets, pages],
   );
   const resolve = useMemo(() => createWikiResolver(targets), [targets]);
+  const sidePanelRestoredRef = useRef(false);
+  const lastSidePanelOpenRef = useRef(sidePanelOpen);
+
+  useEffect(() => {
+    if (sidePanelRestoredRef.current) return;
+    sidePanelRestoredRef.current = true;
+    try {
+      const stored = window.localStorage.getItem(SIDE_PANEL_STORAGE_KEY);
+      if (stored !== 'open' && stored !== 'closed') return;
+      setSidePanelOpen(stored === 'open');
+    } catch {
+      return;
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!sidePanelRestoredRef.current || sidePanelOpen === lastSidePanelOpenRef.current) return;
+    lastSidePanelOpenRef.current = sidePanelOpen;
+    try {
+      window.localStorage.setItem(SIDE_PANEL_STORAGE_KEY, sidePanelOpen ? 'open' : 'closed');
+    } catch {
+      return;
+    }
+  }, [sidePanelOpen]);
 
   useEffect(() => {
     const root = articleRef.current;
