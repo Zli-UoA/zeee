@@ -29,7 +29,7 @@ const MarkdownView = lazy(() =>
 );
 
 const editorClassName =
-  'min-h-[calc(60svh-3.5rem)] w-full max-w-[36.5rem] flex-1 lg:min-h-[calc(100vh-18rem-4.5rem)]';
+  'min-h-[calc(60svh-3.5rem)] w-full flex-1 lg:min-h-[calc(100vh-18rem-4.5rem)]';
 
 type Props = {
   page: PageRecord;
