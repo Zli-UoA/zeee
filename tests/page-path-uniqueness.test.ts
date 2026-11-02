@@ -14,6 +14,7 @@ import {
   updatePageTitle,
 } from '../src/server/db';
 import { ensureSchema, splitSqlStatements } from '../src/server/schema';
+import { INVALID_PATH, pathRequestErrorMessage } from '../src/shared/pagePath';
 import { sqliteD1 } from './helpers/d1';
 
 const stores: ReturnType<typeof sqliteD1>[] = [];
@@ -54,13 +55,14 @@ function requestContext(
   token: string | null,
   body: unknown,
   pageId?: string,
+  origin = 'http://localhost',
 ): CloudContext {
   return {
     env: { DB: db, ZEEE_DEV_AUTH: '1' },
     req: {
       url: `http://localhost${path}`,
       header: (name: string) => {
-        if (name === 'origin') return 'http://localhost';
+        if (name === 'origin') return origin;
         if (name === 'cookie' && token) return `zeee_session=${token}`;
         return undefined;
       },
@@ -239,5 +241,67 @@ describe('0002_path_uniqueness migration', () => {
         ?.value,
     ).toBe('1');
     await expect(createPage(rerun, 'a', 'creator')).resolves.toMatchObject({ title: 'a' });
+  });
+});
+
+describe('page path syntax validation', () => {
+  const invalidPaths = ['', '   ', '/a', 'a/', 'a//b', 'a/ /b', 'a'.repeat(201)];
+
+  it('returns 400 INVALID_PATH for invalid create paths without inserting a page', async () => {
+    const { db, sqlite } = await fixture();
+    const token = await createSession(db, 'creator');
+
+    for (const title of invalidPaths) {
+      const response = (await createPagePOST(
+        requestContext(db, '/api/pages', token, { title }),
+      )) as Response;
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({ error: INVALID_PATH });
+    }
+    expect(sqlite.prepare('SELECT count(*) AS n FROM page').get()?.n).toBe(0);
+  });
+
+  it('returns 400 INVALID_PATH for invalid rename paths without changing the page', async () => {
+    const { db } = await fixture();
+    const token = await createSession(db, 'creator');
+    const page = await createPage(db, 'a/b', 'creator');
+
+    for (const title of invalidPaths) {
+      const response = (await pagePATCH(
+        requestContext(db, `/api/pages/${page.id}`, token, { title }, page.id),
+      )) as Response;
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({ error: INVALID_PATH });
+      expect((await getPage(db, page.id))?.title).toBe('a/b');
+    }
+  });
+
+  it('normalizes valid path whitespace for create and rename', async () => {
+    const { db } = await fixture();
+    const token = await createSession(db, 'creator');
+
+    const created = (await createPagePOST(
+      requestContext(db, '/api/pages', token, { title: ' a / b ' }),
+    )) as Response;
+    expect(created.status).toBe(201);
+    const body = (await created.json()) as { page: { id: string; title: string } };
+    expect(body.page.title).toBe('a/b');
+
+    const renamed = await pagePATCH(
+      requestContext(db, `/api/pages/${body.page.id}`, token, { title: ' c / d ' }, body.page.id),
+    );
+    if (renamed instanceof Response) expect(renamed.status).toBe(200);
+    expect((await getPage(db, body.page.id))?.title).toBe('c/d');
+  });
+
+  it('keeps 403 and maps INVALID_PATH to a display message', async () => {
+    const { db } = await fixture();
+    const token = await createSession(db, 'creator');
+
+    const forbidden = (await createPagePOST(
+      requestContext(db, '/api/pages', token, { title: 'a' }, undefined, 'http://evil.local'),
+    )) as Response;
+    expect(forbidden.status).toBe(403);
+    expect(pathRequestErrorMessage(400, INVALID_PATH)).toContain('パスの形式');
   });
 });

@@ -101,7 +101,7 @@ ORDER BY p.title, q.title;
 
 migration 自体も、既存の active ページに完全重複または prefix 衝突がある場合は `PATH_CONFLICT: existing active page paths conflict` で安全に失敗する。この場合、index / trigger / marker は作られない。
 
-API では `createPage`、`updatePageTitle`、undelete の衝突を `409` と `{ "error": "PATH_CONFLICT" }` で返す。既存の 400 / 401 / 403 / 404 は変更しない。
+API では `createPage`、`updatePageTitle`、undelete の衝突を `409` と `{ "error": "PATH_CONFLICT" }` で返す。パス構文の違反（空、先頭・末尾 `/`、空セグメント、空白のみのセグメント、200 文字超）は `400` と `{ "error": "INVALID_PATH" }` で返す。既存の 401 / 403 / 404 は変更しない。
 
 ## 失敗時の確認
 

@@ -1,5 +1,6 @@
 export const MAX_PAGE_PATH_LENGTH = 200;
 export const PATH_CONFLICT = 'PATH_CONFLICT';
+export const INVALID_PATH = 'INVALID_PATH';
 export const PATH_CONFLICT_MESSAGE =
   'パスが競合しています。同名のページやディレクトリと重ならない名前にしてください。';
 

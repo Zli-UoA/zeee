@@ -10,7 +10,7 @@ import {
 } from '../src/server/db';
 import { jsonError, redirectTo, sameOrigin } from '../src/server/http';
 import { readRecentPages } from '../src/server/recent';
-import { normalizeDirectoryPath } from '../src/shared/pagePath';
+import { INVALID_PATH, normalizeDirectoryPath, parsePagePath } from '../src/shared/pagePath';
 import type { RecentPage } from '../src/shared/recent';
 import { PaginationError, parsePagination, parsePageSort } from '../src/server/pagination';
 import type {
@@ -100,9 +100,9 @@ export const action = defineHandler(async (c) => {
   if (!sameOrigin(c)) return c.text('Forbidden', 403);
 
   const body = await c.req.parseBody();
-  const rawTitle = body.title;
-  const title = (typeof rawTitle === 'string' ? rawTitle : '').trim().slice(0, 200);
-  if (!title) return redirectTo(c, '/');
+  const parsed = parsePagePath(typeof body.title === 'string' ? body.title : '');
+  if (!parsed) return c.text(INVALID_PATH, 400);
+  const title = parsed.path;
 
   const env = c.env as Env;
   try {
