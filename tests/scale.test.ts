@@ -49,7 +49,7 @@ async function fixture(count = 0) {
   );
   for (let i = 0; i < count; i++) {
     const id = `page-${String(i).padStart(4, '0')}`;
-    const title = i % 13 === 0 ? '同じ題名' : `Page ${i}`;
+    const title = i % 13 === 0 ? `同じ題名 ${i}` : `Page ${i}`;
     insert.run(id, title, 'creator', Math.floor(i / 9), Math.floor(i / 7));
     store.sqlite.prepare('INSERT INTO page_body VALUES (?,?,?)').run(id, 'needle 本文', 0);
     store.sqlite.prepare('INSERT INTO page_fts VALUES (?,?,?)').run(id, title, 'needle 本文');

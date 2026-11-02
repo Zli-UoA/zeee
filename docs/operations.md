@@ -52,6 +52,57 @@ R2 secrets が未設定のままデプロイすると、deploy は skip され�
 - 特定の commit を出したいときは `workflow_dispatch` の `ref` に SHA を指定する
 - 同じ ref の再実行が必要なときも `workflow_dispatch` を使う
 
+## ページパス一意性 migration（0002_path_uniqueness）
+
+ページタイトルは `/` 区切りのパスとして扱う。`migrations/0002_path_uniqueness.sql` は次を DB で保証する。
+
+- active なページの完全重複を禁止する partial unique index
+- active なページの prefix 衝突（`a` と `a/b`）を禁止する INSERT / title UPDATE / deleted_at UPDATE の trigger
+- 削除済みページは対象外。復元（`deleted_at` を `NULL` に戻す UPDATE）時に再チェックする
+
+既存データは自動改名しない。適用前に次の監査 SQL を実行し、1 行でも返ったら migration を適用せず、対象ページを手動で改名・整理する。
+
+完全重複:
+
+```sql
+SELECT title, count(*) AS n, group_concat(id) AS ids
+FROM page
+WHERE deleted_at IS NULL
+GROUP BY title
+HAVING count(*) > 1
+ORDER BY title;
+```
+
+prefix 衝突（`p.title` と `q.title` のどちらかが親パス）:
+
+```sql
+SELECT p.id AS ancestor_id, p.title AS ancestor_path,
+       q.id AS descendant_id, q.title AS descendant_path
+FROM page p
+JOIN page q
+  ON q.id > p.id
+ AND p.deleted_at IS NULL
+ AND q.deleted_at IS NULL
+ AND (
+   substr(q.title, 1, length(p.title) + 1) = p.title || '/'
+   OR substr(p.title, 1, length(q.title) + 1) = q.title || '/'
+ )
+ORDER BY p.title, q.title;
+```
+
+手順:
+
+1. D1 のバックアップを取得する。
+2. 上の 2 つの監査 SQL を実行する。結果が空であることを確認する。
+3. 結果がある場合は **blocker** として扱い、デプロイを止める。`page_alias` を残したまま、対象ページのタイトルを手動で変更する。自動改名はしない。
+4. アプリをデプロイする。`ensureSchema` が `0001_scale` の後に `0002_path_uniqueness` を適用する。
+5. `SELECT value FROM meta WHERE key = 'migration:0002_path_uniqueness';` が `1` になることを確認する。
+6. migration が衝突で失敗した場合、D1 batch は rollback され marker は立たない。監査 SQL で対象を直してから再デプロイする（`schemaPromises` は失敗時にキャッシュを破棄するため、同じ isolate でも再試行される）。
+
+migration 自体も、既存の active ページに完全重複または prefix 衝突がある場合は `PATH_CONFLICT: existing active page paths conflict` で安全に失敗する。この場合、index / trigger / marker は作られない。
+
+API では `createPage`、`updatePageTitle`、undelete の衝突を `409` と `{ "error": "PATH_CONFLICT" }` で返す。既存の 400 / 401 / 403 / 404 は変更しない。
+
 ## 失敗時の確認
 
 - `pnpm check` / `pnpm test` / `pnpm build:celld` の失敗: CI と同じ手順をローカルで再現する

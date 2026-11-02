@@ -41,7 +41,10 @@ function database(handler: (sql: string, args: unknown[]) => QueryResult): D1Dat
         } as unknown as D1Result<T>;
       },
       async first<T>() {
-        if (sql.includes("FROM meta WHERE key = 'migration:0001_scale'"))
+        if (
+          sql.includes("FROM meta WHERE key = 'migration:0001_scale'") ||
+          sql.includes("FROM meta WHERE key = 'migration:0002_path_uniqueness'")
+        )
           return { value: '1' } as T;
         return (handler(sql, args).first ?? null) as T | null;
       },

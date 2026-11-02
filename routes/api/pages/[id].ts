@@ -1,6 +1,12 @@
 import { defineHandler } from 'void';
 import { getSessionUser } from '../../../src/server/auth';
-import { getPage, recordAudit, softDeletePage, updatePageTitle } from '../../../src/server/db';
+import {
+  getPage,
+  PathConflictError,
+  recordAudit,
+  softDeletePage,
+  updatePageTitle,
+} from '../../../src/server/db';
 import { jsonError, pathParam, sameOrigin } from '../../../src/server/http';
 import type { Env } from '../../../src/server/types';
 
@@ -25,7 +31,12 @@ export const PATCH = defineHandler(async (c) => {
   const pageId = pathParam(c, 'id');
   const page = await getPage(env.DB, pageId);
   if (!page) return jsonError(c, 404, 'page not found');
-  await updatePageTitle(env.DB, pageId, title, page.title, user.id);
+  try {
+    await updatePageTitle(env.DB, pageId, title, page.title, user.id);
+  } catch (error) {
+    if (error instanceof PathConflictError) return jsonError(c, 409, 'PATH_CONFLICT');
+    throw error;
+  }
   await recordAudit(env.DB, user.id, 'page.rename', 'page', pageId);
   return { ok: true };
 });

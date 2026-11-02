@@ -3,6 +3,7 @@ import { getSessionUser, loginPath } from '../src/server/auth';
 import {
   createPage,
   listPages,
+  PathConflictError,
   recordAudit,
   searchPages,
   listPageNavigation,
@@ -104,7 +105,12 @@ export const action = defineHandler(async (c) => {
   if (!title) return redirectTo(c, '/');
 
   const env = c.env as Env;
-  const page = await createPage(env.DB, title, user.id);
-  await recordAudit(env.DB, user.id, 'page.create', 'page', page.id);
-  return redirectTo(c, `/pages/${page.id}`);
+  try {
+    const page = await createPage(env.DB, title, user.id);
+    await recordAudit(env.DB, user.id, 'page.create', 'page', page.id);
+    return redirectTo(c, `/pages/${page.id}`);
+  } catch (error) {
+    if (error instanceof PathConflictError) return c.text('PATH_CONFLICT', 409);
+    throw error;
+  }
 });
