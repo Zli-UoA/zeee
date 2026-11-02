@@ -16,11 +16,13 @@ import rehypeSanitize, { defaultSchema } from 'rehype-sanitize';
 import rehypeHighlight from 'rehype-highlight';
 import { Badge, Button, Text } from '@cloudflare/kumo';
 import { CheckIcon, CopyIcon } from '@phosphor-icons/react';
+import { createPageByPath } from '../client/pagePathApi';
 import type { Backlink } from '../server/backlinks';
 import type { PageNavigation } from '../server/types';
 import { rehypeHeadings } from '../markdown/headings';
 import { sameToc, type TocItem } from '../markdown/toc';
 import { createWikiResolver, remarkWikiLinks, type LinkTarget } from '../markdown/wiki';
+import { validatePagePath } from '../shared/pagePath';
 
 type Props = {
   markdown: string;
@@ -114,7 +116,11 @@ export function MarkdownView({
         const state = node?.properties?.dataWikiState;
         const wikiTitle = node?.properties?.dataWikiTitle;
         if (state === 'missing' && typeof wikiTitle === 'string') {
-          return <MissingWikiLink title={wikiTitle}>{children}</MissingWikiLink>;
+          return (
+            <MissingWikiLink title={wikiTitle} pages={pages}>
+              {children}
+            </MissingWikiLink>
+          );
         }
         const external = href?.startsWith('http://') || href?.startsWith('https://');
         const internal = href?.startsWith('/') && !href.startsWith('//');
@@ -162,7 +168,7 @@ export function MarkdownView({
         return <Heading level={6} {...props} />;
       },
     }),
-    [],
+    [pages],
   );
 
   const hasToc = toc.length > 0;
@@ -368,7 +374,15 @@ function Heading({
   );
 }
 
-function MissingWikiLink({ title, children }: { title: string; children?: ReactNode }) {
+function MissingWikiLink({
+  title,
+  pages,
+  children,
+}: {
+  title: string;
+  pages: PageNavigation[];
+  children?: ReactNode;
+}) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -377,28 +391,19 @@ function MissingWikiLink({ title, children }: { title: string; children?: ReactN
     if (busy) return;
     setBusy(true);
     setError('');
-    try {
-      const response = await fetch('/api/pages', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ title }),
-      });
-      if (!response.ok) {
-        setError('作成できませんでした。もう一度お試しください。');
-        setBusy(false);
-        return;
-      }
-      const data = (await response.json()) as { page?: { id?: string } };
-      if (!data.page?.id) {
-        setError('作成できませんでした。もう一度お試しください。');
-        setBusy(false);
-        return;
-      }
-      void router.visit(`/pages/${data.page.id}`);
-    } catch {
-      setError('作成できませんでした。もう一度お試しください。');
+    const validation = validatePagePath(title, pages);
+    if (!validation.ok) {
+      setError(validation.message);
       setBusy(false);
+      return;
     }
+    const result = await createPageByPath(validation.path);
+    if (!result.ok) {
+      setError(result.message);
+      setBusy(false);
+      return;
+    }
+    void router.visit(`/pages/${result.id}`);
   }
 
   return (

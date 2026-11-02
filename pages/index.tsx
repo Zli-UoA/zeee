@@ -2,9 +2,12 @@ import type { FormEvent } from 'react';
 import type { Props } from './index.server';
 import { Link, useRouter } from '@void/react';
 import { Button, Empty, Input, LayerCard, Select, Text } from '@cloudflare/kumo';
-import { FilesIcon, MagnifyingGlassIcon, PlusIcon } from '@phosphor-icons/react';
+import { FilesIcon, MagnifyingGlassIcon } from '@phosphor-icons/react';
 import { AppShell } from '../src/components/AppShell';
+import { DirectoryScope } from '../src/components/DirectoryScope';
 import { Gate } from '../src/components/Gate';
+import { PagePathContext } from '../src/components/PagePathBreadcrumb';
+import { PagePathCreateForm } from '../src/components/PagePathCreateForm';
 import { formatDate } from '../src/shared/format';
 import type { PageSort, PageSummary, SearchResult } from '../src/server/types';
 import { Pagination } from '../src/components/Pagination';
@@ -44,6 +47,7 @@ export default function Home({
   sidebarPages,
   recentPages,
   query,
+  dir,
   sort,
   results,
   cursor,
@@ -66,7 +70,13 @@ export default function Home({
   }
 
   return (
-    <AppShell user={user} pages={sidebarPages} initialRecentPages={recentPages} query={query}>
+    <AppShell
+      user={user}
+      pages={sidebarPages}
+      initialRecentPages={recentPages}
+      query={query}
+      dir={dir}
+    >
       {!user ? (
         <Gate
           title="Zeee は Zli のための知識ベース"
@@ -78,16 +88,18 @@ export default function Home({
           <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
             <div className="flex min-w-0 flex-col gap-1">
               <Text variant="heading" size="lg" as="h1">
-                {query ? '検索結果' : 'ページ'}
+                {query ? '検索結果' : dir ? 'ディレクトリ' : 'ページ'}
               </Text>
               <Text variant="secondary" size="sm">
                 {query
                   ? `「${query}」に一致するページ ${results.length}件${cursor || nextCursor ? 'を表示' : ''}`
-                  : `${pages.length}ページ${cursor || nextCursor ? 'を表示' : ''}`}
+                  : dir
+                    ? `「${dir}」の配下`
+                    : `${pages.length}ページ${cursor || nextCursor ? 'を表示' : ''}`}
               </Text>
             </div>
 
-            {!query && pages.length > 0 ? (
+            {!query && !dir && pages.length > 0 ? (
               <div className="flex shrink-0 items-center gap-2">
                 <Text as="span" variant="secondary" size="sm" id="page-sort-label">
                   並び順
@@ -148,23 +160,14 @@ export default function Home({
             <Empty
               icon={<MagnifyingGlassIcon size={32} />}
               title="該当なし"
-              description={`「${query}」に一致するページはありません。このタイトルで新規作成できます。`}
+              description={`「${query}」に一致するページはありません。このパスで新規作成できます。`}
               contents={
                 <div className="flex w-full max-w-sm flex-col items-center gap-3">
-                  <form method="post" action="/" className="flex w-full items-center gap-2">
-                    <Input
-                      name="title"
-                      defaultValue={query}
-                      placeholder="ページタイトル"
-                      aria-label="新しいページのタイトル"
-                      required
-                      maxLength={200}
-                      className="min-w-0 flex-1"
-                    />
-                    <Button type="submit" variant="primary" icon={<PlusIcon size={14} />}>
-                      作成
-                    </Button>
-                  </form>
+                  <PagePathCreateForm
+                    pages={sidebarPages}
+                    defaultValue={query}
+                    ariaLabel="新しいページのパス"
+                  />
                   <Link className="text-sm text-kumo-link" href="/">
                     ページ一覧に戻る
                   </Link>
@@ -177,19 +180,11 @@ export default function Home({
               title="まだページがありません"
               description="新しいページを作成してください。"
               contents={
-                <form method="post" action="/" className="flex w-full max-w-sm items-center gap-2">
-                  <Input
-                    name="title"
-                    placeholder="ページタイトル"
-                    aria-label="新しいページのタイトル"
-                    required
-                    maxLength={200}
-                    className="min-w-0 flex-1"
-                  />
-                  <Button type="submit" variant="primary">
-                    作成
-                  </Button>
-                </form>
+                <PagePathCreateForm
+                  pages={sidebarPages}
+                  ariaLabel="新しいページのパス"
+                  className="max-w-sm"
+                />
               }
             />
           ) : query ? (
@@ -200,6 +195,8 @@ export default function Home({
                 ))}
               </ul>
             </LayerCard>
+          ) : dir ? (
+            <DirectoryScope pages={sidebarPages} dir={dir} />
           ) : sort === 'title' ? (
             <LayerCard className="overflow-hidden p-0">
               <ul className="divide-y divide-kumo-line">
@@ -236,13 +233,15 @@ export default function Home({
               )}
             </div>
           )}
-          <Pagination
-            query={query}
-            sort={sort}
-            cursor={cursor}
-            nextCursor={nextCursor}
-            limit={limit}
-          />
+          {dir && !query ? null : (
+            <Pagination
+              query={query}
+              sort={sort}
+              cursor={cursor}
+              nextCursor={nextCursor}
+              limit={limit}
+            />
+          )}
         </div>
       )}
     </AppShell>
@@ -347,6 +346,7 @@ function SearchResultRow({ result, query }: { result: SearchResult; query: strin
         <span className="min-w-0 truncate text-sm font-medium text-kumo-link">
           <Highlight text={result.title} query={query} />
         </span>
+        <PagePathContext title={result.title} />
         <span className="line-clamp-2 text-sm text-kumo-subtle">
           <Highlight text={result.excerpt || '本文はまだありません'} query={query} />
         </span>

@@ -12,9 +12,12 @@ import {
 import { AppLink } from './AppLink';
 import { CommandPalette } from './CommandPalette';
 import { CreatePageDialog } from './CreatePageDialog';
+import { PagePathBreadcrumb } from './PagePathBreadcrumb';
+import { PageTree } from './PageTree';
 import { ZeeeLogo } from './ZeeeLogo';
 import { sidebarPageLists } from '../client/sidebarPages';
 import { useRecentPages, type RecentPage } from '../client/useRecentPages';
+import { pagePathName } from '../shared/pagePath';
 import type { PageNavigation, SessionUser } from '../server/types';
 
 type NavSection = 'trash';
@@ -27,6 +30,7 @@ type Props = {
   activeTitle?: string;
   activeNav?: NavSection;
   query?: string;
+  dir?: string;
   children: ReactNode;
 };
 
@@ -38,6 +42,7 @@ export function AppShell({
   activeTitle,
   activeNav,
   query,
+  dir,
   children,
 }: Props) {
   const [livePages, setLivePages] = useState(pages);
@@ -55,7 +60,7 @@ export function AppShell({
     [recentPages, livePages],
   );
 
-  const { recentPages: sidebarRecentPages, allPages } = useMemo(
+  const { recentPages: sidebarRecentPages } = useMemo(
     () => sidebarPageLists(livePages, recentPagesWithTitles),
     [livePages, recentPagesWithTitles],
   );
@@ -131,6 +136,7 @@ export function AppShell({
           activePageId={activePageId}
           activeNav={activeNav}
           query={query}
+          dir={dir}
         />
         <SkipToContent />
         <Sidebar id="pages-nav" className="md:sticky md:top-0 md:h-svh">
@@ -162,18 +168,14 @@ export function AppShell({
 
             <Sidebar.Group>
               <Sidebar.GroupLabel>すべてのページ</Sidebar.GroupLabel>
-              <Sidebar.Menu>
-                {allPages.map((page) => (
-                  <Sidebar.MenuButton
-                    href={`/pages/${page.id}`}
-                    active={page.id === activePageId}
-                    aria-current={page.id === activePageId ? 'page' : undefined}
-                    key={page.id}
-                  >
-                    {page.title}
-                  </Sidebar.MenuButton>
-                ))}
-              </Sidebar.Menu>
+              <div className="px-1.5">
+                <PageTree
+                  pages={livePages}
+                  activePageId={activePageId}
+                  activeTitle={liveTitle}
+                  activeDirectory={dir}
+                />
+              </div>
             </Sidebar.Group>
 
             {livePages.length === 0 ? (
@@ -206,24 +208,12 @@ export function AppShell({
 
               <div className="min-w-0 md:hidden">
                 <span className="block truncate text-sm font-medium text-kumo-strong">
-                  {liveTitle ?? 'Zeee'}
+                  {liveTitle ? pagePathName(liveTitle) : 'Zeee'}
                 </span>
               </div>
 
               {liveTitle ? (
-                <nav
-                  className="hidden min-w-0 items-center gap-2 md:flex"
-                  aria-label="パンくずリスト"
-                >
-                  <Link
-                    className="shrink-0 text-sm text-kumo-subtle no-underline hover:text-kumo-default"
-                    href="/"
-                  >
-                    ページ
-                  </Link>
-                  <span className="text-kumo-subtle">/</span>
-                  <span className="truncate text-sm font-medium text-kumo-strong">{liveTitle}</span>
-                </nav>
+                <PagePathBreadcrumb title={liveTitle} className="hidden min-w-0 md:flex" />
               ) : null}
 
               <div className="ml-auto flex shrink-0 items-center gap-2">
@@ -294,7 +284,7 @@ export function AppShell({
           onOpenChange={setPaletteOpen}
           recentPages={recentPagesWithTitles}
         />
-        <CreatePageDialog open={createOpen} onOpenChange={setCreateOpen} />
+        <CreatePageDialog open={createOpen} onOpenChange={setCreateOpen} pages={livePages} />
       </Sidebar.Provider>
     </LinkProvider>
   );
@@ -304,16 +294,18 @@ function CloseMobileSidebarOnNavigate({
   activePageId,
   activeNav,
   query,
+  dir,
 }: {
   activePageId?: string;
   activeNav?: NavSection;
   query?: string;
+  dir?: string;
 }) {
   const { setOpenMobile } = useSidebar();
 
   useEffect(() => {
     setOpenMobile(false);
-  }, [activePageId, activeNav, query, setOpenMobile]);
+  }, [activePageId, activeNav, query, dir, setOpenMobile]);
 
   return null;
 }
