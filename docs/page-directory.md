@@ -1,406 +1,640 @@
-# ページディレクトリ設計 contract
+# ページディレクトリ設計 contract（パス方式）
 
-状態: 設計のみ（実装前）。基準は `main` の `99bb3a4` と、Wave 3.1 Scale の PR #19（`feat/scale`, `139903b`）の contract。
+状態: 設計のみ（実装前）。Base は `origin/main` の `f048ddf`。`0001_scale` はマージ済みで、この設計はその後ろに `0002_path_uniqueness.sql` を置く。
 
-このドキュメントは、Zeee のフラットなページ一覧に親子関係（ディレクトリ）を追加するための最小 contract を定める。コード変更、schema 変更、PR 分割の単位は末尾にまとめる。PR #19 で `listPages` の cursor 化、`listPageNavigation`、migration runner、SQLite 統合テストが入っているため、ディレクトリはそれらを前提に設計する。
+このドキュメントは、PR #20 で一度決めた `parent_id` 方式を置き換え、ページタイトルを `/` 区切りのパスとして扱う方式の contract を定める。コード変更、schema 変更、PR 分割の単位は末尾にまとめる。
 
-## 1. 結論
+## 0. 決定事項
 
-| 項目                | 決定                                                                                                                   |
-| ------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| 階層の持ち方        | `page.parent_id`（nullable、自己参照）だけ。materialized path は使わない                                               |
-| URL                 | 既存の `/pages/:id` を維持する。パス URL は導入しない                                                                  |
-| 子の並び順          | 同じ親の中ではタイトル順。手動並べ替えは MVP 外                                                                        |
-| 移動                | `PATCH /api/pages/:id` に `parentId` を追加。循環はサーバーで拒否                                                      |
-| 親の削除            | 生存中の子がいる削除は 409 で拒否。子を先に削除または移動させる                                                        |
-| 復元                | 親が存在しない / 削除済みならルートに戻す                                                                              |
-| 完全削除            | 子は `ON DELETE SET NULL` でルートに戻す                                                                               |
-| タイトル重複        | 許容する。Wiki リンクの解決規則は現状のまま（更新日時が新しい方）                                                      |
-| 既存ページ          | すべて `parent_id = NULL` のルートとして移行。データ書き換えなし                                                       |
-| ツリーの取得        | `listPageNavigation` を `parentId` 付きに拡張し、専用 `GET /api/pages/tree` を追加。`listPages` の cursor とは分離する |
-| 検索 / バックリンク | ディレクトリの影響を受けない。フラットなまま                                                                           |
+| 項目                  | 決定                                                                                                       |
+| --------------------- | ---------------------------------------------------------------------------------------------------------- |
+| 階層の表現            | `page.title` を `/` 区切りのフルパスとして扱う（例: `a/b/c`）。`parent_id` も directory テーブルも持たない |
+| `/` の意味            | タイトル文字ではなく階層区切り。タイトルに `/` を入れたい需要はない                                        |
+| ディレクトリ          | `a` / `a/b` はページではなく仮想ディレクトリ。実体は配下の active page のパスから導出する                  |
+| ページとディレクトリ  | 完全に別物。同名共存は禁止                                                                                 |
+| active パスの不変条件 | 完全一致の重複禁止、かつ prefix-free（`a` と `a/b` は共存不可、`a/b` と `a/c` は可）                       |
+| 一意性の保証          | backend の partial unique index + prefix trigger。UI の事前チェックだけにしない                            |
+| 作成・rename          | 1 つのパス入力。ディレクトリ autocomplete あり。ページ作成 / ディレクトリ作成のモード切替はない            |
+| 空ディレクトリ        | MVP 外。ディレクトリは配下に active page がある間だけ存在する                                              |
+| ディレクトリ rename   | MVP 外。配下ページを個別に rename する以外の一括操作は提供しない                                           |
+| 既存データ            | `/` 入りタイトルはそのままパスとして解釈する。データ書き換えはしない                                       |
+| 一覧の scope          | 「すべてのページ」と `?dir=a%2Fb` は同じ PageTree の scope 違い                                            |
+| 検索                  | ページのフルパスを対象・表示にする                                                                         |
+| Wiki リンク           | `[[a/b]]` のフルパス解決。`[[b]]` は `a/b` に解決しない                                                    |
+| migration             | `migrations/0002_path_uniqueness.sql` を `0001_scale` の後に適用する                                       |
 
-最重要の前提は **「ディレクトリはメタデータであり、ページの同一性・URL・Wiki リンク解決を変えない」** こと。これにより、既存の本文、履歴、共有 URL、バックリンクを壊さずに段階導入できる。
+## 1. 用語と不変条件
 
-## 2. 現状の確認
+- **パス**: `page.title` に入る文字列。`a/b/c` のように `/` で区切る。ページの表示名と同一で、別の「表示タイトル」列は持たない。
+- **セグメント**: パスを `/` で分割した各要素。`a/b/c` のセグメントは `a`, `b`, `c`。
+- **ページ**: `page` 行を持つ実体。パスは active なページのフルパス。
+- **ディレクトリ**: 実体を持たない仮想ノード。active なページパスの proper prefix（セグメント境界）としてのみ存在する。
+- **active**: `deleted_at IS NULL` のページ。
+- **scope**: PageTree が見せる範囲。全ページか、特定ディレクトリ配下の subtree。
 
-- `page` は `id, title, created_by, created_at, updated_at, deleted_at` のみで、階層情報はない（`src/server/schema.ts`）。
-- ページの同一性は UUID の `id`。URL は `/pages/:id`（`pages/pages/[id].server.ts`）。
-- PR #19 で `PAGE_LIST_LIMIT` は撤去され、`listPages` は `PageSlice<T>`（`items`, `nextCursor`, `limit`）を返す cursor 一覧になった。`sort` は `updated` / `created` / `title`（`src/server/db.ts`, `src/server/types.ts`, `src/server/pagination.ts`）。
-- PR #19 の `listPageNavigation` は、表示中のページ・sort・検索に依存せず、全 active page の `{ id, title, updatedAt }` を返す。サイドバーと最近見たページの照合に使う（`src/server/db.ts`）。
-- PR #19 で `PageSummary` / `PageRecord` / `DeletedPageSummary` / `SearchResult` に `updatedBy` / `updatedByName` が追加され、`page_last_editor` に最終更新者が保存される（`src/server/types.ts`, `migrations/0001_scale.sql`）。
-- Wiki リンク `[[タイトル]]` はタイトルと旧タイトル（`page_alias`）を全体で解決する。重複時は `updated_at` が新しいページを優先する（`src/markdown/wiki.ts`）。
-- バックリンクはタイトル / alias の LIKE 検索で、ページ階層を見ない（`src/server/backlinks.ts`）。PR #19 でも `page_link` は導入していない。
-- サイドバーは「最近見たページ」と「すべてのページ」のフラットな 2 リスト（`src/components/AppShell.tsx`）。データ源は `listPageNavigation`。
-- パンくずは現状「ページ / 現在のタイトル」の 2 要素だけ（`src/components/AppShell.tsx`）。
-- 削除はソフトデリート。復元と完全削除はゴミ箱から行う（`src/server/db.ts`, `pages/trash.tsx`）。
-- `ensureSchema` は基礎スキーマの後に `migrations/0001_scale.sql` を適用し、`meta['migration:0001_scale']` で実行済みを判定する。marker は migration と同じ D1 `batch` に入り、失敗時は全体が rollback される（`src/server/schema.ts`）。
+active なページパスには次の不変条件を課す。
 
-## 3. データモデル
+1. **完全一致の一意性**: 同じパスの active ページは 1 つだけ。
+2. **prefix-free**: ある active パスが別の active パスのセグメント境界 prefix になってはいけない。`a` と `a/b` は共存不可。`a/b` と `a/c`、`a` と `ab`、`a/b` と `a/bc` は共存可。
+3. **ページは葉**: 1 と 2 により、ページの下にページは置けない。`a/b` がページなら `a/b/c` は存在しない。`a` がページなら `a/b` は存在しない。
+4. **ページとディレクトリの排他**: ディレクトリ `a` は「active な `a/...` が存在する」ことと同値。したがってページ `a` とディレクトリ `a` は同時に存在しない。
+5. **削除済みは active 集合の外**: ソフトデリートされたページは 1〜4 の対象外。active と同じパスを持つことができる。復元時に再度検証する。
+6. **自動改名しない**: 不変条件違反を見つけても、システムが勝手にパスを書き換えない。作成・rename・復元は失敗させ、既存データの衝突は人手で解消する。
 
-### 3.1 `parent_id` を選ぶ
+## 2. データモデル
 
-`page` に次の 1 列を追加する。
+### 2.1 `title` がパス
 
-```sql
-parent_id TEXT NULL REFERENCES page(id) ON DELETE SET NULL
+`page` の schema は変えない。`title` がそのままフルパスになる。
+
+```text
+page.id      page.title
+--------     ----------
+p1           a
+p2           a/b
+p3           a/c
+p4           x/y/z
 ```
 
-- `NULL` はルートページ。
-- 親は同じ `page` テーブルの生存ページ。
-- インデックスは `(parent_id, title, id)` または `(parent_id, updated_at)` を追加する。ツリー取得と子件数チェックで使う。
+この例は不正。`a` と `a/b` が prefix 衝突している。次の形なら正しい。
 
-materialized path（`/a/b/c` のような文字列）を選ばない理由:
+```text
+p1           a/b
+p2           a/c
+p3           x/y/z
+```
 
-1. 移動のたびに子孫の path を一括更新する必要があり、D1 の write amplification が大きい。
-2. path の一意性・エスケープ・タイトル変更との整合が増える。
-3. URL を `/pages/:id` のまま維持するため、path を URL に使う利点がない。
-4. 循環防止は `parent_id` の祖先探索でも再帰 CTE で実装できる。
+- `a` と `x/y` は仮想ディレクトリで、`page` 行を持たない。
+- ディレクトリ一覧は `title` を `/` で分割して導出する。`directory` テーブル、`parent_id`、materialized path 列、closure table は追加しない。
+- パスはページの同一性ではない。ページの同一性は従来どおり UUID の `id`。URL も `/pages/:id` のまま。
+- `page_alias` は従来どおり旧タイトルを保存する。パス方式では旧フルパスを保存する。alias は active パスの一意性には含めない。
 
-closure table も、MVP の規模と操作数では過剰。
+### 2.2 パスの正規形
 
-### 3.2 マイグレーション
+作成・rename の入力は次の規則で検証する。
 
-PR #19 の migration runner をそのまま拡張する。`ensureSchema` は次の順で動く。
+- 前後の空白は全体に対して `trim()` する（既存の作成・rename と同じ）。
+- 空文字は作成時のみ既存どおり `Untitled` にフォールバックする。rename では 400。
+- `/` で分割し、空セグメントを禁止する。先頭 `/`、末尾 `/`、`//` は 400。
+- パス全体の長さ上限は既存の 200 文字を維持する。パス入力では超過を暗黙に切り捨てず 400 にする。
+- セグメントは 1 文字以上。空白だけのセグメントは許可しない。
+- Unicode 正規化・大小文字変換はしない。既存タイトルを書き換えないため、保存されている文字列をそのまま比較する。比較は case-sensitive。
+- `.` / `..` はパス区切りとして特別扱いしない。URL やファイルシステムのパスではないため、文字列としてそのまま扱う。ただし既存データ監査では通常と異なる値を確認する。
+- タイトルに `/` を文字として入れたい需要はない。エスケープ構文は導入しない。将来必要になったら別 contract にする。
 
-1. 基礎スキーマ `SCHEMA` を `CREATE TABLE IF NOT EXISTS` で準備する。
-2. `meta['migration:0001_scale']` がなければ `migrations/0001_scale.sql` を D1 `batch` で適用する。
-3. ディレクトリ用に `meta['migration:0002_directory']` がなければ `migrations/0002_directory.sql` を同じ方式で適用する。
+### 2.3 ページが葉であることの帰結
 
-runner の contract:
+- ページ `a/b` に子ページを作ることはできない。子を作りたい場合は `a/b/c` という別ページを作る。このとき `a/b` はページではなくディレクトリでなければならないため、既存のページ `a/b` は rename または削除が必要。
+- ページの rename は自分自身のパスを変えるだけで、配下ページの一括更新は発生しない。
+- ディレクトリ rename は「配下の全ページの prefix を書き換える」操作になるため MVP 外。UI にディレクトリ rename を出さない。
+- 空ディレクトリは作れない。最後の配下ページが削除・移動された時点でディレクトリは消える。
 
-- migration の SQL と marker の `INSERT` を同一の `batch` に入れる。D1 `batch` は transactional なので、途中で失敗したら marker ごと rollback され、次回リクエストで再試行される。
-- `schemaPromises` は DB binding ごとに `WeakMap` でキャッシュする（#19 の方式）。グローバルな単一 Promise に戻さない。
-- 適用順は `0001_scale` → `0002_directory` に固定する。directory は #19 の `page_last_editor` と索引を前提にしてよい。
-- `0002_directory.sql` の内容は追加のみとする。
-  - `ALTER TABLE page ADD COLUMN parent_id TEXT REFERENCES page(id) ON DELETE SET NULL`
-  - `CREATE INDEX IF NOT EXISTS page_parent_idx ON page(parent_id, title, id)`
-  - 既存行は `NULL` のまま（全ページがルート）。データの書き換えはしない。
-- SQLite には `ADD COLUMN IF NOT EXISTS` がない。`0002` は marker で一度しか実行されないが、手動適用や将来の再実行に備え、runner 側で `PRAGMA table_info(page)` を確認し、`parent_id` が未追加のときだけ ALTER を含む batch を組む。SQL ファイル単体を Wrangler で再適用する運用はしない。
-- Wrangler の `migrations_dir` に `0002_directory.sql` を追加する場合、アプリの `meta` marker と Wrangler の migration 管理表は別物であることに注意する。自動適用を正とし、Wrangler は空 DB / 事前適用のときだけ使う。両方を同じ DB に適用しない。
-- `PRAGMA foreign_keys` が有効でないと `ON DELETE SET NULL` は動かない。`tests/helpers/d1.ts` は `PRAGMA foreign_keys = ON` を設定しているので、ディレクトリのテストもこの helper で FK を検証する。本番 D1 / celld の実効性は spike で確認する。
-- 本番 D1 のバックアップと `0002` の適用手順は `docs/operations.md` に追記する。
+## 3. 一意性の backend 保証
 
-### 3.3 並び順
+### 3.1 partial unique index
 
-同じ親を持つ兄弟は、次の順で決定的に並べる。
+active パスの完全一致を DB で禁止する。
 
-1. `title` の `localeCompare('ja', { numeric: true, sensitivity: 'base' })`
-2. `updated_at DESC`
-3. `id ASC`
+```sql
+CREATE UNIQUE INDEX IF NOT EXISTS page_active_path_unique
+  ON page(title)
+  WHERE deleted_at IS NULL;
+```
 
-- ルート同士も同じ規則。
-- 手動のドラッグ並べ替え、`sibling_order` 列は MVP 外。必要になったら `position INTEGER NULL` を追加し、`NULL` はタイトル順にフォールバックする。
-- サイドバーのツリーはこの順、一覧ページの既存 sort（更新順 / 作成順 / タイトル順）はそのまま維持する。ツリーと一覧で順序が違ってよい。
+- `deleted_at IS NULL` の partial index なので、削除済みページは同じパスを保持できる。
+- 完全一致の重複は `UNIQUE constraint failed: page.title` になる。
+- 既存の `page_active_title_idx` は残してよいが、一意性の根拠にはしない。
 
-### 3.4 移動と循環防止
+### 3.2 prefix trigger
 
-移動は `PATCH /api/pages/:id` の `parentId` で行う。
+セグメント境界の prefix 衝突を DB で禁止する。文字列の単純な `LIKE 'a%'` ではなく、`a` と `ab` を誤検知しない比較にする。
 
-- `parentId: null` はルートへ移動。
-- 移動先は生存ページであること。削除済みなら 404。
-- 自分自身を親にできない。
-- 移動先の祖先に自分が含まれる場合は 409。再帰 CTE で祖先をたどり、`pageId` が見つかったら更新しない。
-- 深さ上限は 32。超える移動は 400。
-- 移動は `updated_at` を変更しない（後述の Scale contract）。
-- 子の `parent_id` は変更しない。サブツリーは自動的に付いてくる。
+```sql
+CREATE TRIGGER IF NOT EXISTS page_path_prefix_insert
+BEFORE INSERT ON page
+WHEN NEW.deleted_at IS NULL
+BEGIN
+  SELECT RAISE(ABORT, 'page_path_prefix_conflict')
+  WHERE EXISTS (
+    SELECT 1
+    FROM page p
+    WHERE p.deleted_at IS NULL
+      AND (
+        substr(NEW.title, 1, length(p.title) + 1) = p.title || '/'
+        OR substr(p.title, 1, length(NEW.title) + 1) = NEW.title || '/'
+      )
+  );
+END;
 
-循環チェックと更新の間に別リクエストが割り込む可能性はあるが、D1 は single writer であり、Zeee の同時編集頻度では許容する。厳密にするなら `UPDATE ... WHERE NOT EXISTS (再帰 CTE で自分が祖先にいる)` の 1 文にする。
+CREATE TRIGGER IF NOT EXISTS page_path_prefix_update
+BEFORE UPDATE OF title, deleted_at ON page
+WHEN NEW.deleted_at IS NULL
+BEGIN
+  SELECT RAISE(ABORT, 'page_path_prefix_conflict')
+  WHERE EXISTS (
+    SELECT 1
+    FROM page p
+    WHERE p.deleted_at IS NULL
+      AND p.id <> NEW.id
+      AND (
+        substr(NEW.title, 1, length(p.title) + 1) = p.title || '/'
+        OR substr(p.title, 1, length(NEW.title) + 1) = NEW.title || '/'
+      )
+  );
+END;
+```
 
-### 3.5 削除・ゴミ箱・復元
+- `substr(x, 1, length(prefix) + 1) = prefix || '/'` で「セグメント境界の prefix」を判定する。`%` や `_` を含むタイトルでも wildcard の影響を受けない。
+- INSERT は新規作成、UPDATE は rename と復元（`deleted_at` を `NULL` に戻す）で発火する。
+- ソフトデリート（`deleted_at` を非 NULL に更新）では `WHEN NEW.deleted_at IS NULL` が偽なので発火しない。
+- 完全一致は partial unique index が担当する。trigger は prefix のみを担当する。
+- 自分自身の rename は `p.id <> NEW.id` で除外する。
 
-**ソフトデリート（`DELETE /api/pages/:id`）**
+### 3.3 書き込み経路とエラー
 
-- 生存中の子が 1 件以上ある場合は 409 `has_children`。子の件数を返す。
-- 子を先に削除するか、別の親へ移動してから削除する。
-- これにより「親を消したら子も一括でゴミ箱」という暗黙の一括操作を導入しない。子の復元順序や部分復元の複雑さを避けるための意図的な制約。
-- 削除されたページの `parent_id` は保持する。ゴミ箱で親子関係を表示するために使える。
+| 操作           | 検証                                                              | 失敗時                                    |
+| -------------- | ----------------------------------------------------------------- | ----------------------------------------- |
+| 作成           | `parsePagePath` → 事前衝突チェック → INSERT（index + trigger）    | 400 invalid_path / 409 path_conflict      |
+| rename         | `parsePagePath` → 事前衝突チェック → UPDATE（index + trigger）    | 400 invalid_path / 409 path_conflict      |
+| ソフトデリート | active 集合から外れるだけ。衝突チェックなし                       | なし                                      |
+| 復元           | UPDATE で `deleted_at = NULL`。trigger が active 集合に対して検証 | 409 path_conflict。ページは削除済みのまま |
+| 完全削除       | パス不変条件に影響しない                                          | なし                                      |
 
-**復元（`POST /api/pages/:id/undelete`）**
+- UI の事前チェックは即時フィードバックのためだけに使う。最終保証は index と trigger。
+- 事前チェックと書き込みの間に別リクエストが割り込んでも、D1 は single writer であり、trigger が最終的に拒否する。
+- SQLite の `UNIQUE constraint failed: page.title` と `page_path_prefix_conflict` は API で 409 にマップする。可能なら 409 の body に衝突相手のパスと id を含める。事前チェックで取得した衝突一覧を返し、race で trigger に倒れた場合も再取得して返す。
+- 復元の 409 は「自動で別名にしない」。UI は「同じパスの active ページがあるため復元できません。先に rename するか、既存ページを削除してください」と表示する。
 
-- 親が存在しない、または `deleted_at IS NOT NULL` の場合は `parent_id = NULL` にしてルートへ復元する。
-- 復元結果に `reparentedToRoot: true` を含め、UI で「親が削除済みのためルートに戻しました」と表示する。
-- 親が後から復元されても、子を自動で元の親に戻さない。必要なら手動で移動する。
+### 3.4 性能上の注意
 
-**完全削除（`DELETE /api/pages/:id/permanent`）**
+- 完全一致は partial unique index で O(log n)。
+- prefix trigger の `substr` 比較は active page の走査になる。現行規模（数百〜数千）では許容するが、書き込みごとに O(n) になる。
+- 将来、書き込み頻度やページ数が増えた場合は、祖先パスの別テーブルや正規化列を検討する。ただし「directory テーブルを持たない」contract を変える場合は別 PR で設計する。MVP では trigger の単純さと正しさを優先する。
 
-- 対象は削除済みページのみ（現状どおり）。
-- 生存中の子がいる状態はソフトデリートの時点で作れない。
-- 削除済みの子がいる場合は、`ON DELETE SET NULL` により子の `parent_id` を `NULL` にする。子はゴミ箱に残り、復元時はルートになる。
-- 監査イベントは現状の `page.permanent_delete` を維持する。
+## 4. Migration `0002_path_uniqueness.sql`
 
-この contract により、一括削除・一括復元・カスケードの新規実装を不要にする。
+### 4.1 適用順
 
-## 4. URL
+`ensureSchema` は次の順で動く。
 
-- 正規 URL は `/pages/:id` のまま。
-- パス URL（`/pages/folder/page`）は導入しない。
-- タイトル変更・移動・重複タイトルで URL は変わらない。
-- パンくずの各要素も `/pages/:id` へのリンクにする。
-- 将来パス URL を出す場合も、`/pages/:id` を canonical とし、パスはリダイレクト用の別名に留める。
+1. 基礎スキーマ `SCHEMA`（`CREATE TABLE IF NOT EXISTS`）。
+2. `meta['migration:0001_scale']` がなければ `migrations/0001_scale.sql` を D1 `batch` で適用。
+3. パスの事前監査（後述）を行い、active の重複・prefix 衝突があれば **migration を中止**する。
+4. `meta['migration:0002_path_uniqueness']` がなければ `migrations/0002_path_uniqueness.sql` を D1 `batch` で適用。
+5. `page_fts` を準備する（現行どおり）。
 
-## 5. 読み取り側の contract
+`0002_path_uniqueness.sql` は `0001_scale` の後ろに固定する。`0001_scale` の `page_last_editor` と索引を前提にしてよい。
 
-### 5.1 型
+### 4.2 ファイル内容
 
-PR #19 の `PageNavigation` / `PageSlice<T>` を前提に、ディレクトリ用のフィールドを追加する。`PageSummary`、`PageRecord`、`DeletedPageSummary` は `parentId` を持ち、既存の `updatedBy` / `updatedByName` はそのまま維持する。
+`migrations/0002_path_uniqueness.sql` は DDL と marker のみで、`UPDATE page SET title = ...` を含めない。
+
+- `page_active_path_unique`（partial unique index）
+- `page_path_prefix_insert` / `page_path_prefix_update`（trigger）
+- `INSERT OR REPLACE INTO meta (key, value) VALUES ('migration:0002_path_uniqueness', '1')`
+
+`0002` は `ALTER TABLE` を含まないため、`PRAGMA table_info` のガードは不要。再実行は `IF NOT EXISTS` と marker で no-op になる。
+
+### 4.3 migration runner の変更点
+
+既存の runner は SQL を `;` で分割している。trigger は `BEGIN ... END;` の中に `;` を含むため、単純分割すると壊れる。`0002` を入れる PR では、runner に trigger を意識した statement splitter を追加する。
+
+- `BEGIN` / `END` のネストを数え、trigger 定義を 1 statement として扱う。
+- 分割した各 statement を `db.prepare(...)` し、marker と一緒に `db.batch(...)` に入れる。D1 `batch` は transactional なので、途中失敗時は marker ごと rollback される。
+- trigger の `CREATE` を別 statement として実行する実装でもよいが、migration ファイルと実行内容がずれないようにする。
+- `schemaPromises` は DB binding ごとの `WeakMap` キャッシュを維持する。グローバルな単一 Promise に戻さない。
+- splitter の単体テストに、trigger を含む SQL、文字列リテラル内の `;`、コメント行を入れる。
+
+### 4.4 事前監査を migration に組み込む
+
+runner は `0002` の DDL を実行する前に、active の完全一致重複と prefix 衝突を SELECT で確認する。1 件でもあれば例外を投げ、DDL も marker も適用しない。
+
+- 自動改名はしない。衝突を解消するのは運用者。
+- migration を「衝突があっても index/trigger だけ作る」状態にしない。既存の不変条件違反を残したまま起動しない。
+- 削除済みページと active ページの衝突は migration を止めない。復元時に 409 になる既知の状態として監査レポートに出す。
+
+### 4.5 バックアップ・適用・検証
+
+1. D1 の Time Travel bookmark を取得し、`wrangler d1 export` などでバックアップを取る。
+2. 読み取り専用で監査 SQL を実行し、結果を保存する。
+3. 衝突がゼロであることを確認する。
+4. 通常のデプロイで `ensureSchema` に `0002` を適用させる。Wrangler の migrations 管理とアプリの `meta` marker を同じ DB に二重適用しない。
+5. 次を検証する。
+   - `meta['migration:0002_path_uniqueness']` が存在する。
+   - `sqlite_master` に `page_active_path_unique`、`page_path_prefix_insert`、`page_path_prefix_update` が存在する。
+   - active page 数と title の内容が migration 前後で変わっていない。
+   - 作成・rename・ソフトデリート・復元の smoke test が通る。
+6. 失敗時は D1 `batch` の rollback で marker ごと戻る。手動で rollback する場合は trigger → index → marker の順に削除するが、不変条件が失われるため通常は行わない。
+
+## 5. 既存データ監査と移行手順
+
+### 5.1 監査 SQL
+
+すべて読み取り専用。`deleted_at` の有無を明示して実行する。
+
+**A. `/` を含むタイトルの棚卸し（active / deleted 両方）**
+
+```sql
+SELECT id, title, deleted_at
+FROM page
+WHERE instr(title, '/') > 0
+ORDER BY title, id;
+```
+
+`/` 入りはそのままパスとして解釈する。ここに出すだけでデータは書き換えない。
+
+**B. active の完全一致重複**
+
+```sql
+SELECT title, COUNT(*) AS count, GROUP_CONCAT(id) AS ids
+FROM page
+WHERE deleted_at IS NULL
+GROUP BY title
+HAVING COUNT(*) > 1
+ORDER BY title;
+```
+
+**C. active の prefix 衝突**
+
+```sql
+SELECT
+  p1.id AS page_id,
+  p1.title AS page_path,
+  p2.id AS other_id,
+  p2.title AS other_path
+FROM page p1
+JOIN page p2
+  ON p1.deleted_at IS NULL
+ AND p2.deleted_at IS NULL
+ AND p1.id < p2.id
+ AND (
+   substr(p2.title, 1, length(p1.title) + 1) = p1.title || '/'
+   OR substr(p1.title, 1, length(p2.title) + 1) = p2.title || '/'
+ )
+ORDER BY p1.title, p2.title;
+```
+
+`p1.id < p2.id` は同じペアの二重表示を避けるため。`a` と `ab` は衝突しない。
+
+**D. 正規形でないパス**
+
+```sql
+SELECT id, title, deleted_at
+FROM page
+WHERE title = ''
+   OR substr(title, 1, 1) = '/'
+   OR substr(title, -1, 1) = '/'
+   OR instr(title, '//') > 0
+ORDER BY title, id;
+```
+
+空白だけのセグメントなど、より細かい異常はアプリの `parsePagePath` と同じ規則で別途確認する。
+
+**E. 削除済みページと active ページの衝突（復元が 409 になる候補）**
+
+```sql
+SELECT
+  d.id AS deleted_id,
+  d.title AS deleted_path,
+  p.id AS active_id,
+  p.title AS active_path,
+  CASE WHEN d.title = p.title THEN 'duplicate' ELSE 'prefix' END AS kind
+FROM page d
+JOIN page p
+  ON d.deleted_at IS NOT NULL
+ AND p.deleted_at IS NULL
+ AND (
+   d.title = p.title
+   OR substr(d.title, 1, length(p.title) + 1) = p.title || '/'
+   OR substr(p.title, 1, length(d.title) + 1) = d.title || '/'
+ )
+ORDER BY d.title, p.title;
+```
+
+これは migration を止めない。復元時に衝突することを事前に把握するためのレポート。
+
+**F. ディレクトリ名と同名の alias（リンク解決の曖昧さ候補）**
+
+```sql
+SELECT a.alias, a.page_id, p.id AS active_page_id
+FROM page_alias a
+JOIN page p
+  ON p.deleted_at IS NULL
+ AND substr(p.title, 1, length(a.alias) + 1) = a.alias || '/'
+ORDER BY a.alias, p.title;
+```
+
+alias は active パスの一意性には含めない。ここに出たものは「ディレクトリ名と同名の旧ページ alias」であり、Wiki リンクの解決で紛らわしくなり得る。MVP では自動削除しない。
+
+**G. migration 前後の件数確認**
+
+```sql
+SELECT
+  COUNT(*) AS all_pages,
+  SUM(CASE WHEN deleted_at IS NULL THEN 1 ELSE 0 END) AS active_pages,
+  SUM(CASE WHEN deleted_at IS NOT NULL THEN 1 ELSE 0 END) AS deleted_pages
+FROM page;
+```
+
+### 5.2 手順
+
+1. 書き込みを止めるか、メンテナンス時間を取る。監査と解消の間は書き込みを再開しない。
+2. バックアップを取る（Time Travel bookmark + export）。
+3. 5.1 の A〜G を実行し、結果を保存する。
+4. B / C / D に 1 件でもあれば、migration を適用せずに人手で解消する。
+5. 解消後、B / C / D を再実行してゼロを確認する。
+6. `0002_path_uniqueness.sql` を適用する。
+7. 4.5 の検証と smoke test を行う。
+8. E の結果を関係者に共有する。復元が必要なページは、復元前にパスを rename する運用にする。
+
+### 5.3 衝突の解消例（自動化しない）
+
+- `a`（ページ）と `a/b`（ページ）が共存している。
+  - `a` をページとして残すなら、`a/b` を `x/b` などへ rename するか削除する。
+  - `a` をディレクトリにしたいなら、ページ `a` を `a/index` などへ rename するか、内容を `a/b` に統合してから `a` を削除する。
+- 同じ `a/b` が 2 件ある。
+  - どちらを canonical にするかを決め、もう片方を rename または削除する。本文・履歴・バックリンクの統合が必要なら手動で行う。
+- `a//b` や `/a` がある。
+  - 正規形へ rename する。rename 時に旧パスが alias に残る。
+- 削除済み `a/b` と active `a/b` がある。
+  - すぐに復元しないなら放置してよい。復元するなら削除済み側を先に rename する。
+
+**自動改名しない方針**: migration SQL に `UPDATE page SET title` を入れない。アプリも衝突時に勝手に別名を付けない。一括修正が必要な場合も、dry-run、差分確認、バックアップ、監査イベント記録を伴う明示的な運用にする。どちらを残すかは内容・履歴・リンクの意味を知っている人間が決める。
+
+## 6. 読み取り側と UI の contract
+
+### 6.1 型
+
+`title` は常にフルパス。既存の型名を維持し、`parentId` は追加しない。
 
 ```ts
 type PageNavigation = {
   id: string;
-  title: string;
-  parentId: string | null;
+  title: string; // full path
   updatedAt: number;
 };
-
-type PageSlice<T> = { items: T[]; nextCursor: string | null; limit: number };
 
 type PageSummary = {
-  // PR #19 の既存フィールド
   id: string;
-  title: string;
-  createdAt: number;
-  createdByName: string;
-  updatedBy: string | null;
-  updatedByName: string;
-  excerpt: string;
-  updatedAt: number;
-  // 追加
-  parentId: string | null;
+  title: string; // full path
+  // 既存フィールドは変更しない
+};
+
+type SearchResult = {
+  id: string;
+  title: string; // full path
+  // 既存フィールドは変更しない
 };
 ```
 
-`PageBreadcrumb` は `{ id: string; title: string }` とし、ページ詳細の loader で祖先チェーンを返す。`PageTreeNode` は `PageNavigation` と同じ形（`parentId` を含む）とする。
-
-### 5.2 ツリー取得
-
-`listPages` は cursor 一覧であり、ツリーには使わない。PR #19 の `listPageNavigation` を `parentId` 付きに拡張し、これをツリーの唯一のデータ源にする。
-
-- SSR の loader は `listPageNavigation(env.DB)` を呼び、`PageNavigation[]` を `AppShell` に渡す。表示中の sort / limit / cursor / 検索語に依存しない。
-- クライアント側の再取得用に `GET /api/pages/tree` を追加する。返り値は `{ pages: PageTreeNode[] }`。`PageTreeNode` は `{ id, title, parentId, updatedAt }` のみで、本文・抜粋・作者は含めない。
-- `GET /api/pages/tree` は cursor / limit を使わない。`listPages` / `GET /api/pages` の cursor 契約とは完全に分離する。
-- PR #19 で `PAGE_LIST_LIMIT` は撤去され、`listPageNavigation` は全 active page を返す。ディレクトリは 200 件上限を再導入しない。件数に比例する負荷は #19 の既知の制約と同じで、非常に大きな規模では navigation の追加読み込みを別途設計する。
-- ツリーの深さ上限は 32。`parentId` が存在しない孤児はルート扱いにする。
-
-### 5.3 パンくず
-
-- ページ詳細 loader で祖先を取得し、`ancestors: PageBreadcrumb[]` を返す。ルートから現在の親までを順に並べ、現在ページは含めない。
-- 再帰 CTE 1 回で取得し、N+1 を避ける。深さ上限 32。
-- `AppShell` は「ページ / 祖先 / 現在タイトル」を表示する。祖先が多い場合は先頭 1 件 + 省略 + 末尾 3 件に畳む。
-- 祖先が見つからない（データ不整合）場合は現在の深さで打ち切る。
-
-### 5.4 サイドバー
-
-- 「すべてのページ」をツリー表示にする。ルートは折りたたみ可能。
-- データ源は `listPageNavigation` を拡張した `PageNavigation[]`。`listPages` の現在のページや cursor には依存しない。
-- 「最近見たページ」はフラットなまま。`PageNavigation` との ID 照合でタイトルを解決する。
-- 展開状態はユーザーごとに `localStorage` に保存する。現在ページの祖先は自動展開する。
-- 子を持つページは `aria-expanded` を持つボタン、持たないページはリンクにする。`aria-current="page"` は現状どおり。
-- 削除・移動・作成後は `GET /api/pages/tree` を再取得するか、`zeee:page-moved` / `zeee:page-created` などのイベントでツリーを更新する。既存の `zeee:page-renamed` も維持する。
-- ルートから外れたページ（`parent_id` が存在しないページを指す）はルート扱いにして表示し、データ不整合を隠さない。
-
-### 5.5 一覧ページ（`/`）
-
-- PR #19 のフラット一覧、sort、cursor / `nextCursor` は維持する。`listPages` をツリー用に転用しない。
-- サイドバーのツリーは `listPageNavigation` 由来で、一覧の現在ページ・sort・検索条件から独立している。
-- 各ページに任意で祖先パスを表示する場合は、ツリーから組み立てたパスを副次表示に使う。MVP では省略可。
-- 一覧の action（`POST`）はルート作成のまま。子ページ作成はページ詳細またはツリーのコンテキスト操作から行う。
-
-### 5.6 検索
-
-- PR #19 の `searchPages`、`page_fts`、検索 cursor は変更しない。検索結果はフラットなまま。
-- ディレクトリ名やパスは検索対象にしない。
-- 重複タイトル対策として、将来 `SearchResult` に `parentId` / `path` を足して結果を区別できるようにする。MVP では `id` リンクで足りる。
-
-### 5.7 バックリンク
-
-- `listBacklinks` は変更しない。タイトル / alias のグローバル解決のまま。
-- ディレクトリはバックリンクのスコープを変えない。別ディレクトリの同名ページ間でリンクが曖昧になる問題は、既存の「更新日時が新しい方」規則を維持する。
-- 将来 `page_link` を導入するときも、この解決規則を共通 contract とする。
-
-### 5.8 Wiki リンク
-
-- `[[タイトル]]` は引き続きグローバル解決。`[[Folder/Title]]` のようなパス指定は MVP 外。
-- タイトル重複は許容し、`updated_at DESC, id ASC` で決定的に解決する。現状の `createWikiResolver` は更新日時のみで比較しているため、同値時の `id` 比較を追加して決定性を上げる。
-- 移動はタイトルも alias も変えないため、既存リンクに影響しない。
-
-## 6. 既存ページの移行と重複タイトル
-
-- 既存ページはすべて `parent_id = NULL` のルートとして移行する。本文・履歴・alias・FTS は変更しない。
-- `page.title` に UNIQUE 制約は付けない。同名ページは許可する。
-- 新規作成時に同名チェックはしない。既存の Wiki リンク解決規則を変えないため。
-- 同じ親の下でタイトルを一意にしたくなるのは、パス URL やパスリンクを導入する時の話。MVP では持ち込まない。
-- タイトル変更時は既存どおり `page_alias` に旧タイトルを保存する。移動時は alias を追加しない。
-- PR #19 で `listLinkTargets` の 200 件上限は撤去されている。ディレクトリはこの上限を再導入しない。alias 解決の規則も変更しない。
-
-## 7. Wave 3.1 Scale（PR #19）との関係
-
-PR #19（`feat/scale`）で「一覧の cursor 化」と「最終更新者」は実装済み。`page_link` は PR #19 では追加せず、既存の alias / title 解決を維持する方針。ディレクトリは次の contract を前提にする。
-
-| 論点             | PR #19 の現状                                                                                        | ディレクトリ側の contract                                                                                                                                   |
-| ---------------- | ---------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 一覧 cursor      | `listPages` は `PageSlice<PageSummary>` を返し、`PAGE_LIST_LIMIT` はない                             | `listPages` をツリーに使わない。`listPageNavigation` を `parentId` 付きに拡張し、ツリー専用 `GET /api/pages/tree` を追加する                                |
-| ツリーの取得     | `listPageNavigation` が全 active page の軽量カタログを返す                                           | 同じ関数に `parentId` を足し、SSR と `GET /api/pages/tree` の共通データ源にする。cursor / limit は使わない                                                  |
-| ツリーの上限     | 200 件上限は撤去済み。navigation は件数に比例する                                                    | 200 件上限を再導入しない。深さ上限 32。非常に大きな規模では navigation の追加読み込みを別途設計する                                                         |
-| 最終更新者       | `page_last_editor` と `updatedBy` / `updatedByName` が入る。内容不変の snapshot は作者を上書きしない | 移動は `updated_at` / `updated_by` / `page_last_editor` を変えない。復元・削除は現行の `updated_at` 更新を維持し、`page_last_editor` は変えない             |
-| `page_link`      | PR #19 では追加しない。バックリンクは引き続き title / alias の LIKE 検索                             | ディレクトリも `page_link` に依存しない。将来導入する場合も、リンク解決はグローバルな title / alias 規則（`updated_at DESC, id ASC`）を共通 contract にする |
-| 削除とリンク     | `page_link` がないため、現時点で削除時のリンク整合は不要                                             | 将来 `page_link` を入れる場合、完全削除は `ON DELETE CASCADE`、ソフトデリートはリンクを残して表示時に生存ページのみ解決する                                 |
-| 一覧の並び       | 一覧は `updated` / `created` / `title` の cursor 順                                                  | ツリーの兄弟順はタイトル順で固定。一覧の sort / cursor とは独立させる                                                                                       |
-| バックリンク     | PR #19 でも既存 `listBacklinks` を維持                                                               | ディレクトリ導入時点でも `listBacklinks` を変更しない。`page_link` への移行は別 PR                                                                          |
-| schema migration | `meta['migration:0001_scale']` と D1 `batch` の migration runner                                     | `meta['migration:0002_directory']` を追加し、`0001_scale` の後に順序固定で適用する。marker は同じ batch に入れる                                            |
-
-特に、**`listPages` の cursor 一覧とツリー表示を同じ関数に載せない**ことを最初に決める。PR #19 で `listPages` は cursor 化済みなので、ディレクトリ側は `listPageNavigation` + ツリー専用 endpoint に固定する。ここを混ぜると、ディレクトリ PR と Scale PR のどちらかが必ず手戻りになる。
-
-## 8. API contract（実装時の最小形）
-
-### 8.1 型
+PageTree のノードは、ページと仮想ディレクトリを判別できる形にする。
 
 ```ts
-type PageNavigation = { id: string; title: string; parentId: string | null; updatedAt: number };
-type PageSummary = { /* PR #19 の既存フィールド */ parentId: string | null };
-type PageBreadcrumb = { id: string; title: string };
-type PageTreeNode = PageNavigation;
+type PageTreeNode =
+  | { kind: 'page'; id: string; path: string; name: string; updatedAt: number }
+  | { kind: 'directory'; path: string; name: string; children: PageTreeNode[] };
+
+type PageTreeScope = { kind: 'all' } | { kind: 'directory'; path: string };
 ```
 
-### 8.2 エンドポイント
+- `path` はフルパス。`name` は最後のセグメント。
+- ディレクトリノードは `id` を持たない。React の key は `path` を使う。
+- ページノードは葉なので `children` を持たない。
+- `listPageNavigation` は従来どおり全 active page の軽量カタログを返す。`title` がフルパスになるだけで、新しい tree endpoint は必須ではない。
 
-| Method   | Path                      | 変更                                                                                                                                        |
-| -------- | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| `POST`   | `/api/pages`              | body に任意の `parentId`。省略時はルート。親が不正なら 400 / 404                                                                            |
-| `PATCH`  | `/api/pages/:id`          | body は `{ title?: string; parentId?: string \| null }`。両方省略は 400。title がある場合は現行の 1〜200 文字検証。移動時は 400 / 404 / 409 |
-| `GET`    | `/api/pages/:id`          | レスポンスに `ancestors: PageBreadcrumb[]` を追加（ページ本体は現行どおり）                                                                 |
-| `GET`    | `/api/pages/tree`         | 新規。`{ pages: PageTreeNode[] }`。`listPageNavigation` を `parentId` 付きで返す。cursor / limit は使わない                                 |
-| `DELETE` | `/api/pages/:id`          | 生存中の子がいれば 409 `{ error: 'has_children', childCount }`                                                                              |
-| `POST`   | `/api/pages/:id/undelete` | 親が無効ならルートへ復元し、`{ ok: true, reparentedToRoot: boolean }`                                                                       |
+### 6.2 PageTree と scope
 
-既存の `GET /api/pages` は PR #19 の cursor 契約のまま変更しない。`GET /api/pages/tree` は一覧とは別経路で、`sort` / `cursor` / `limit` を受け取らない。
+- クライアントの純粋関数 `buildPageTree(pages)` が、`PageNavigation[]` のフルパスを `/` で分割してディレクトリノードを合成する。
+- 同じ階層の兄弟は表示名（最後のセグメント）で決定的に並べる。`Intl.Collator('ja', { numeric: true, sensitivity: 'base' })` を使い、同値なら `path`、`updatedAt`、`id` で tie-break する。ページとディレクトリは同名共存できないため、表示名の重複は起きない。
+- `scope: { kind: 'all' }` は root のページとディレクトリを表示する。
+- `scope: { kind: 'directory', path: 'a/b' }` は `a/b` 配下の subtree を表示する。ディレクトリ自身はヘッダー / パンくずに出し、子として繰り返さない。
+- どちらの scope も同じ `PageTree` コンポーネントを使う。「すべてのページ」は `kind: 'all'`、ディレクトリリンクは `kind: 'directory'`。
+- ディレクトリは配下に active page がある間だけ存在する。空ディレクトリは MVP 外なので、存在しないディレクトリへのリンクは 404 にする（後述）。
+- 深いパスでも表示が壊れないように、折りたたみとインデントで対応する。ページは葉なので、ページノードに展開ボタンは付けない。
+- サイドバーの「すべてのページ」も同じ `buildPageTree` を使う。ページ詳細では active page を `aria-current="page"` で示す。
+- 「最近見たページ」はフラットなまま。`id` で `PageNavigation` と照合し、表示はフルパスにする。
+- コマンドパレット / 検索結果 / パンくずもフルパス表示に統一する。
 
-`PATCH` の title と parentId を同時に受けるのは、既存のタイトル保存経路を増やさないため。UI はどちらか片方だけを送ってよい。
+### 6.3 作成・rename の UI
 
-### 8.3 監査
+- 作成ダイアログと rename は、どちらも 1 つのパス入力だけを出す。「ページ作成 / ディレクトリ作成」のモード切替はない。
+- 入力値はフルパス。例: `a/b/c`。`a/b/` のような末尾 `/` はエラーにする。
+- ディレクトリ autocomplete は、既存の `PageNavigation[]` から `deriveDirectories(pages)` で全ディレクトリパスを導出して出す。候補を選ぶと `a/b/` まで入力し、最後のセグメントをユーザーが入力する。専用の directory API は作らない。
+- 新しいディレクトリ名を直接入力して保存すると、その配下のページ作成と同時にディレクトリが生まれる。空ディレクトリだけを作る操作は提供しない。
+- rename はページのパス編集として扱う。ページは葉なので、配下ページの一括更新は起きない。ディレクトリノードには rename 操作を出さない。
+- 入力中に `parsePagePath` と `pathConflicts` で即時エラーを出す。保存時は backend の 409 を表示する。409 の body に衝突相手があれば、そのパスをエラー内に出す。
+- 既存の「Untitled」フォールバックは作成時のみ維持する。rename の空入力は 400。
 
-- 既存の `page.create` / `page.rename` / `page.delete` / `page.undelete` / `page.permanent_delete` を維持する。
-- 移動は `page.move` を追加し、`target_id` はページ ID、親 ID は別途記録できないため `audit_event` の拡張はしない。必要なら `action = 'page.move'` のみで開始する。
+### 6.4 検索
 
-## 9. frontend / backend の PR 分割
+- `page_fts` の `title` はフルパスなので、`a/b` を検索すると `a/b` のページに当たる。本文検索も従来どおり。
+- 検索結果はフルパスを表示する。同名の葉（別ディレクトリの `index` など）を区別できるようにする。
+- MVP では検索はグローバル。`?dir` の scope で検索結果を絞らない。ディレクトリ内検索が必要になったら、`dir` を `searchPages` の追加オプションにする別 PR にする。
+- 検索結果のリンクは従来どおり `/pages/:id`。パスは表示と検索のためで、URL にはしない。
+
+### 6.5 Wiki リンク
+
+- `[[a/b]]` はフルパス `a/b` の完全一致で解決する。
+- `[[b]]` は、active ページまたは alias に完全一致の `b` がある場合だけ解決する。`a/b` には解決しない。basename フォールバックは導入しない。
+- `[[a/b|表示名]]` の label は従来どおり。
+- rename で旧フルパスを `page_alias` に保存するため、`[[a/b]]` は rename 後も旧パス alias として解決できる。新しいリンクは新パスで作る。
+- active パスが alias より優先する。既存の `listLinkTargets` が「active title と同名の alias を除外する」挙動を維持する。
+- alias 同士が衝突した場合は `updatedAt DESC, id ASC` で決定的に解決する。`createWikiResolver` の比較に `id` を追加する。
+- Wiki リンクの autocomplete はフルパスを候補にし、`[[a/b]]` を挿入する。
+- ディレクトリ名はページではないため、`[[a]]` は「`a` というページまたは alias がある」場合だけ解決する。`a` がディレクトリであることだけを理由に解決しない。
+
+### 6.6 ゴミ箱・復元
+
+- ゴミ箱の表示はフルパス。ディレクトリは active page から導出するため、削除済みページだけではディレクトリを作らない。
+- 復元は `deleted_at = NULL` の UPDATE で trigger が走る。active の完全一致または prefix 衝突があれば 409 で失敗し、ページは削除済みのまま残る。自動 rename はしない。
+- 復元に成功すると、そのパスを含むディレクトリが再び現れる。
+- 完全削除はパスの不変条件に影響しない。従来どおり削除済みページのみ対象。
+
+### 6.7 URL
+
+- ページの canonical URL は `/pages/:id` のまま。パスをページ URL にしない。
+- ディレクトリの URL は `/?dir=<encodeURIComponent(fullPath)>`。例: `/?dir=a%2Fb`。
+- `dir` がない `/` は「すべてのページ」scope。`dir=`（空）も同じ扱いにする。
+- `dir` はフルパスの正規形として検証する。不正なら 400。
+- `dir` が active ページの proper prefix になっていない場合（配下に active page がない、または `dir` 自身が active page）は 404。空ディレクトリを作らない MVP では「ディレクトリが存在する = 配下に active page がある」ため。
+- パンくずはディレクトリ階層を `/?dir=...` のリンクにし、現在ページは `/pages/:id` にする。
+- `?dir` はあくまで表示 scope。ページの同一性、共有 URL、Wiki リンクの解決には使わない。
+
+### 6.8 API
+
+| Method   | Path                      | 変更                                                                                       |
+| -------- | ------------------------- | ------------------------------------------------------------------------------------------ |
+| `POST`   | `/api/pages`              | body は `{ title }`。`title` はフルパス。不正は 400、衝突は 409。`parentId` は受け取らない |
+| `PATCH`  | `/api/pages/:id`          | body は `{ title }`。rename / 移動を同じパス編集として扱う。400 / 404 / 409                |
+| `GET`    | `/api/pages`              | 既存の cursor 契約のまま。`title` がフルパスになる                                         |
+| `GET`    | `/api/pages/:id`          | 既存のまま。`title` がフルパス                                                             |
+| `DELETE` | `/api/pages/:id`          | 既存のソフトデリート。子のガードは不要（ページは葉）                                       |
+| `POST`   | `/api/pages/:id/undelete` | 既存の復元。衝突時は 409 `path_conflict`                                                   |
+| `GET`    | `/api/search`             | 既存のまま。結果の `title` がフルパス                                                      |
+
+- `GET /api/pages/tree` は追加しない。`listPageNavigation` の全件カタログをクライアントでツリー化し、scope で絞る。
+- `GET /api/pages/directories` も追加しない。ディレクトリは `PageNavigation[]` から導出する。
+- `PageSummary` / `PageRecord` / `DeletedPageSummary` / `SearchResult` に `parentId` を足さない。
+- 409 の body は `{ error: 'path_conflict', path, conflicts: [{ id, path }] }` を基本形にする。完全一致と prefix を区別する場合は `kind` を足す。
+
+## 7. 実装順と PR 分割
 
 ### PR 1: 設計ドキュメント（この PR）
 
 - `docs/page-directory.md` のみ。
-- コード・schema は変更しない。
+- コード、schema、migration は変更しない。
+- 旧 `parent_id` 方式を置き換える contract をレビューで固定する。
 
-### PR 2: backend contract
+### PR 2: backend のパス検証・一意性・migration
 
-ブランチ例: `feat/page-directory-api`。PR #19 のマージ後、または `feat/scale` に rebase して開始する。
+ブランチ例: `feat/page-path-uniqueness`。Base は `f048ddf` 以降の main。
 
-- `migrations/0002_directory.sql`: `parent_id`、`page_parent_idx`。追加のみ。
-- `src/server/schema.ts`: `0001_scale` の後に `0002_directory` を適用する runner。`meta['migration:0002_directory']` と `PRAGMA table_info(page)` のガード。
-- `src/server/types.ts`: `PageNavigation.parentId`、`PageSummary.parentId`、`PageBreadcrumb`、`PageTreeNode`。
-- `src/server/db.ts`: `listPageNavigation` に `parent_id` を追加（`listPages` には触れない）、`createPage` の `parentId`、`updatePageParent`、祖先取得、子件数チェック、`undeletePage` のルート復帰、`permanentlyDeletePage` の確認。
-- `routes/api/pages/tree.ts`、`routes/api/pages/index.ts`、`routes/api/pages/[id].ts`、`routes/api/pages/[id]/undelete.ts`。
-- `tests/pageDirectory.test.ts`: `tests/helpers/d1.ts` を使い、migration、祖先探索、循環判定、タイトル順、ルート復帰、FK `SET NULL` を検証。
-- UI は変更しない。既存 UI は `parentId` を無視して動く。
+- `src/server/pagePath.ts`（新規）: `parsePagePath`、`pathConflicts`、`deriveDirectories`、`isDirectoryPath`。client と共有できる純粋関数にする。
+- `migrations/0002_path_uniqueness.sql`: partial unique index、prefix trigger、marker。`UPDATE` を含めない。
+- `src/server/schema.ts`: `0001_scale` の後に `0002_path_uniqueness` を適用。trigger を扱う statement splitter、事前監査、marker、`WeakMap` キャッシュ。
+- `src/server/db.ts`: `createPage` / `updatePageTitle` / `undeletePage` のパス検証と 409 マッピング。`listPageNavigation` / `listPages` / `searchPages` は `title` がフルパスになるだけで、cursor 契約は変えない。
+- `routes/api/pages/index.ts`、`routes/api/pages/[id].ts`、`routes/api/pages/[id]/undelete.ts`: 400 / 409 のレスポンス。
+- `tests/pagePath.test.ts`: 検証、衝突、ディレクトリ導出。
+- `tests/pagePathMigration.test.ts`: `tests/helpers/d1.ts` で migration、index、trigger、復元衝突、再実行 no-op、事前監査の失敗を検証。
+- `tests/http.test.ts` の fake DB は `migration:0002_path_uniqueness` marker も返すよう更新する。
+- UI はまだ変えない。既存 UI は `title` をそのまま表示するため、`/` 入りタイトルがパスとして見える以外は動く。
 
-### PR 3: frontend tree / breadcrumbs
+### PR 3: PageTree / scope / autocomplete
 
-ブランチ例: `feat/page-directory-ui`。backend PR のマージ後に開始する。
+ブランチ例: `feat/page-path-ui`。PR 2 のマージ後。
 
-- `src/client/pageTree.ts`: 隣接リストからツリーを組む純粋関数、祖先パス、展開状態のキー。
-- `tests/pageTree.test.ts`: 並び順、孤児、循環データ、深いチェーン。
-- `src/components/AppShell.tsx`: サイドバーのツリー、パンくずの祖先表示。`PageNavigation[]` を使う。
-- 各 loader（`pages/index.server.ts`, `pages/pages/[id].server.ts`, `pages/trash.server.ts`）: 既存の `listPageNavigation` 経由で `parentId` と `ancestors` を通す。
-- `tests/discovery.test.ts` の `sidebarPageLists` 期待値をツリー対応に更新。
-- 作成ダイアログはルート作成のまま。子ページ作成はページ詳細のメニューに置く場合は PR 4。
+- `src/client/pageTree.ts`（新規）: `buildPageTree`、`scopeTree`、`findDirectory`、`deriveDirectories` の client 側利用。
+- `src/client/pagePath.ts` など、PR 2 の純粋関数を共有する。重複実装しない。
+- `src/components/PageTree.tsx`（新規）: ページ / ディレクトリノード、折りたたみ、scope 表示、アクセシビリティ。
+- `src/components/AppShell.tsx`: サイドバーの「すべてのページ」を PageTree にし、パンくずをパスから組み立てる。
+- `pages/index.server.ts` / `pages/index.tsx`: `?dir` の parse、400 / 404、scope 付き PageTree。`?dir` がない場合は all scope。
+- `pages/pages/[id].server.ts` / `[id].tsx`: パンくず、サイドバーの active 表示、フルパス表示。
+- `CreatePageDialog` / rename UI: 1 パス入力、ディレクトリ autocomplete、409 表示。モード切替は作らない。
+- `tests/pageTree.test.ts`: ツリー構築、scope、孤児、深いパス、並び順。
+- `tests/discovery.test.ts` / `tests/http.test.ts`: サイドバーと scope の期待値を更新。
 
-### PR 4（任意）: 移動・削除ガードの UX
+### PR 4: 検索・Wiki リンクのフルパス統一
 
-- ツリーの「ここへ移動」、ページメニューの「子ページを作成」。
-- 親削除時の 409 をダイアログで説明し、子ページ一覧へのリンクを出す。
-- 復元時の `reparentedToRoot` 通知。
+PR 2 と同時でもよいが、UI の表示変更と分けたい場合は独立させる。
 
-backend を先に出すことで、frontend は API の形だけに依存できる。逆順にすると、ツリー表示のために一時的なクライアント側推測（タイトルから親を決める等）が必要になり、捨て実装が増える。
+- `src/markdown/wiki.ts`: `createWikiResolver` の tie-break に `id` を追加。フルパス完全一致のテストを追加。basename フォールバックがないことを固定する。
+- Wiki autocomplete: 候補をフルパスにし、`[[a/b]]` を挿入。
+- 検索結果 / コマンドパレット: フルパス表示。
+- `tests/wikiLinks.test.ts` / `tests/aliases.test.ts`: `[[a/b]]` 解決、`[[b]]` 非解決、旧パス alias、active 優先。
+- ディレクトリ内検索はこの PR に入れない（MVP 外）。
 
-## 10. fixture とテスト計画
+### PR 5（任意）: 運用ツールと UX の仕上げ
 
-### 10.1 純粋関数の fixture
+- 監査 SQL を `scripts/audit-page-paths.sql` などに固定し、dry-run を用意する。自動改名はしない。
+- 409 の衝突相手表示、復元失敗の説明、ディレクトリ 404 の空状態。
+- 深いツリーの折りたたみ、キーボード操作、モバイル幅の確認。
 
-隣接リストで次を用意する。
+### 将来（MVP 外）
 
-```ts
-// 正常系
-[
-  { id: 'a', title: 'Alpha', parentId: null },
-  { id: 'b', title: 'Beta', parentId: 'a' },
-  { id: 'c', title: 'Gamma', parentId: 'a' },
-  { id: 'd', title: 'Delta', parentId: null },
-  { id: 'e', title: 'Epsilon', parentId: 'd' },
-];
-```
+- 空ディレクトリの永続化（directory テーブルまたは sentinel page）。
+- ディレクトリ rename（配下パスの一括更新）。
+- ディレクトリ内検索。
+- パス URL（`/a/b`）とリダイレクト。canonical は `/pages/:id` のまま。
+- パスに `/` 以外の予約文字を入れる需要が出た場合のエスケープ contract。
 
-追加ケース:
+## 8. テスト計画
 
-- 孤児: `parentId` が存在しない → ルートに表示。
-- 循環: `a -> b -> a` → ツリー構築が無限ループしない。循環ノードはルートに退避するか、表示から除外する（決めた方にテスト）。
-- 深さ 33: 移動・祖先取得が 400 / 打ち切りになる。
-- タイトル重複: 別ディレクトリの同名ページが両方表示され、リンク解決は `updated_at DESC, id ASC`。
-- 削除済みの親 + 生存中の子: 通常操作では作れないが、データ不整合時は子をルート扱い。
-- cursor 境界: `listPages` の `PageSlice` と `listPageNavigation` の全件ツリーが混ざらないこと。
-- 267 件: PR #19 の `tests/scale.test.ts` と同じ規模で、`listPages` の全走査とツリーの全件取得が独立して動くこと。
+### 8.1 純粋関数
 
-### 10.2 単体・統合テスト
+`parsePagePath`:
 
-PR #19 で `tests/helpers/d1.ts` が追加されている。`node:sqlite` の in-memory DB を D1 互換の `prepare` / `batch` / `exec` で包み、`PRAGMA foreign_keys = ON`、FTS5、batch の rollback を再現する。`tests/scale.test.ts` は 267 件の cursor 全走査、同値境界、削除された境界、migration の再実行 / rollback / retry を検証している。
+- `a`、`a/b`、`a/b/c`、日本語、空白を含むセグメント、`%` / `_` を含むセグメントを受理する。
+- `''`、`/a`、`a/`、`a//b`、`///` を拒否する。
+- 200 文字超を拒否する。
+- `a` と `ab`、`a/b` と `a/bc` を衝突扱いにしない。
 
-ディレクトリは同じ helper を使う。
+`pathConflicts(candidate, pages)`:
 
-- `tests/pageDirectory.test.ts`
-  - `ensureSchema` が `0001_scale` → `0002_directory` の順で適用し、`meta['migration:0002_directory']` を立てること。
-  - `0002` の再実行が no-op で、`parent_id` が二重に追加されないこと。
-  - `parent_id` が既存ページで `NULL` のままであること。
-  - 再帰 CTE による祖先取得と循環拒否。
-  - 子を持つページのソフトデリートが 409 相当になること。
-  - 親が削除済み / 不在のときのルート復帰。
-  - 完全削除で `ON DELETE SET NULL` が効き、削除済みの子がルートになること。
-- `tests/pageTree.test.ts`（純粋関数）
-  - `buildPageTree`: 親子関係、兄弟のタイトル順、決定性、孤児、循環。
-  - `findAncestors`: ルートから親までの順序、深さ上限。
-  - `canMovePage`: 自分自身、子孫への移動、削除済み親、深さ超過。
-  - `resolveRestoreParent`: 親が生存 / 削除済み / 不在の 3 分岐。
-  - `sortSiblings`: `ja` の数値比較と `updatedAt` / `id` の tie-break。
-- `tests/http.test.ts` の fake DB は `first()` で migration marker を返している。`0002_directory` の marker も返すよう更新し、`ensureSchema` が追加 migration を要求しても既存テストが落ちないようにする。
+- 完全一致を検出する。
+- `a` vs `a/b` を検出する。
+- `a/b` vs `a/c` を検出しない。
+- 削除済みページを無視する（呼び出し側で active のみ渡す契約も固定する）。
+- 自分自身を除外する（rename 用）。
 
-### 10.3 手動 / spike
+`deriveDirectories(pages)`:
 
-- ルートに A、A の子 B、B の子 C を作成し、パンくずとサイドバーを確認。
-- C を A の下へ移動し、循環（A を C の下へ）が 409 になることを確認。
-- 子 B がいる A の削除が 409 になり、B 削除後に A を削除できることを確認。
-- A と B を削除し、A を復元、B を復元したときに B がルートへ戻ることを確認。
-- B を完全削除し、A の `parent_id` が `NULL` になることを確認（逆方向のケースも）。
-- 別ディレクトリの同名ページを作り、`[[タイトル]]` が更新日時の新しい方を指すことを確認。
-- 267 件の fixture で、一覧の cursor 送りとツリーの全件表示が同時に動くことを確認。
+- `a/b`、`a/c`、`x/y/z` から `a`、`x`、`x/y` を重複なく返す。
+- active page のフルパスをディレクトリ候補に含めない。
+- 並び順が決定的。
+
+`buildPageTree` / `scopeTree`:
+
+- 正常系、孤児（active ページの prefix が欠けている状態は不変条件上起きないが、防御的に扱う）、深いパス。
+- all scope と directory scope の差。
+- 存在しないディレクトリの scope が 404 相当になる。
+- ページノードが葉であること。
+
+### 8.2 SQLite 統合テスト（`tests/helpers/d1.ts`）
+
+- `ensureSchema` が `0001_scale` → `0002_path_uniqueness` の順で適用し、marker を立てる。
+- `0002` の再実行が no-op で、index / trigger が二重作成されない。
+- active の完全一致 INSERT が unique index で失敗する。
+- `a/b` の後に `a` を INSERT すると prefix trigger で失敗する。
+- `a` の後に `a/b` を INSERT すると prefix trigger で失敗する。
+- `a/b` の後に `a/c`、`a` の後に `ab`、`a/b` の後に `a/bc` は成功する。
+- `a/b` をソフトデリートすると、同じ `a/b` を新規作成できる。
+- 新規 `a/b` がある状態で旧 `a/b` を復元すると 409 相当で失敗し、旧ページは削除済みのまま。
+- rename で `a/b` → `a/c` が成功し、旧パスが alias に残る。
+- rename で他の active ページの prefix になるパスへ変更すると失敗する。
+- 同じパスへの rename（no-op）が成功する。
+- migration 前に active の重複があると、`ensureSchema` が失敗し、index / trigger / marker が作られない。
+- migration 前に active の prefix 衝突があると、同様に失敗する。
+- migration 前後で `page` の行数と title が変わらない（クリーンな fixture）。
+- trigger を含む SQL の splitter が、文字列リテラル内の `;` を壊さない。
+
+### 8.3 HTTP / UI
+
+- `POST /api/pages` に `a/b` を送ると 201、`a` と `a/b` の衝突で 409。
+- `PATCH /api/pages/:id` の rename で 400 / 404 / 409。
+- `POST /api/pages/:id/undelete` の衝突で 409、成功時は 200。
+- `GET /?dir=a%2Fb` が 200 で subtree を返す。
+- `GET /?dir=a` で `a` が active page の場合は 404、`a/...` がある場合は 200。
+- `GET /?dir=` が all scope。
+- `GET /?dir=a//b` が 400。
+- 検索結果と Wiki リンクの表示がフルパス。
+- `[[a/b]]` が解決し、`[[b]]` が `a/b` に解決しない。
+- 旧パス alias が `[[a/b]]` で解決する。
+- サイドバー / PageTree の active 表示、折りたたみ、`aria-current`。
+
+### 8.4 手動 / spike
+
+- 本番相当の D1 で監査 SQL を dry-run し、実行時間と結果を確認する。
+- バックアップから復元できることを確認する。
+- `a/b`、`a/c`、`x/y/z` を作り、`?dir=a` と `?dir=a%2Fb` の scope、パンくず、autocomplete を確認。
+- `a/b` を `a/d` に rename し、旧 `[[a/b]]` が alias で解決することを確認。
+- `a/b` を削除して `a/b` を新規作成し、旧 `a/b` の復元が 409 になることを確認。
+- `%` / `_` / 日本語 / 空白を含むパスで trigger が誤検知しないことを確認。
+- 267 件以上の fixture で、一覧の cursor、PageTree、検索が独立して動くことを確認。
 - `pnpm check` / `pnpm test` / `pnpm build:celld`。余裕があれば `pnpm spike`。
 
-## 11. リスク
+## 9. 残リスク
 
-1. **navigation の全件負荷**: `listPageNavigation` は cursor に依存しない全 active page の軽量カタログで、件数に比例する。PR #19 の既知の制約と同じ。非常に大きな規模では navigation の追加読み込みを別途設計する。
-2. **`ALTER TABLE` の再実行性**: SQLite に `ADD COLUMN IF NOT EXISTS` がない。`meta['migration:0002_directory']` と `PRAGMA table_info(page)` の両方でガードしないと、適用経路によっては二重追加で失敗する。
-3. **FK の実効性**: `ON DELETE SET NULL` は `PRAGMA foreign_keys` が有効でないと動かない。`tests/helpers/d1.ts` は有効にしているが、本番 D1 / celld での挙動を spike で確認する。
-4. **循環の競合**: チェックと更新が別文だと同時移動で循環し得る。D1 の single writer で実害は小さいが、可能なら 1 文の `UPDATE ... WHERE NOT EXISTS` にする。
-5. **復元の驚き**: 親が消えている子がルートに戻る仕様は、ユーザーには位置変更に見える。通知とドキュメントが必要。
-6. **タイトル重複の曖昧さ**: ディレクトリを入れると「同じ名前の別ページ」が増え、Wiki リンクの解決が直感に反しやすくなる。PR #19 でも `page_link` は未導入なので、既知の制約として明示する。
-7. **Scale とのコンフリクト**: PR #19 が `db.ts`, `types.ts`, `schema.ts`, `AppShell.tsx` を変更済み。directory branch は `feat/scale` に rebase するか、#19 のマージ後に開始する。`listPages` ではなく `listPageNavigation` を触る。
-8. **cursor とツリーの混同**: `listPages` をツリーに使う、あるいは tree endpoint に cursor を足すと、#19 の一覧契約と二重になる。`listPageNavigation` + `GET /api/pages/tree` に固定する。
-9. **パンくずの N+1**: 祖先をページごとに引くと遅い。再帰 CTE 1 回か、ツリーから組み立てる。
-10. **サイドバーの操作性**: 深いツリー、折りたたみ、キーボード操作、モバイル幅の確認が必要。`Sidebar` の既存 ARIA を壊さない。
-11. **完全削除と子の整合**: `SET NULL` で子がルートに残ることを、ゴミ箱の表示と復元通知で説明する。
+1. **prefix trigger の O(n)**: `substr` 比較は active page の走査になる。現行規模では許容するが、大規模化すると書き込みが遅くなる。必要になったら祖先パスの別テーブルを別 contract で検討する。
+2. **D1 の trigger と runner**: D1 / SQLite の trigger 構文と、`BEGIN ... END;` を含む SQL の分割に依存する。runner の splitter と統合テストで固定する。本番 D1 で trigger が期待どおり動くことを spike で確認する。
+3. **既存データの人手解消**: 重複・prefix 衝突・不正パスは自動で直さない。件数が多いと移行コストが高い。監査 SQL と dry-run を先に用意する。
+4. **削除済みパスの再利用**: active から消えたパスを新規ページが使える。旧ページを復元すると 409 になる。ゴミ箱 UI で理由を説明する必要がある。
+5. **ディレクトリ rename がない**: 配下ページをまとめて動かせない。MVP の割り切りとして UI でディレクトリに rename を出さない。
+6. **空ディレクトリがない**: 最後のページを削除するとディレクトリが消える。`?dir` のブックマークは 404 になり得る。
+7. **alias とディレクトリ名の衝突**: 旧 alias がディレクトリ名と同じ場合、Wiki リンクがその alias に解決し得る。active パス優先の規則で緩和するが、自動削除はしない。監査 F で可視化する。
+8. **検索が scope 非対応**: `?dir` 表示中も検索はグローバル。ディレクトリ内検索が欲しくなったら別 PR。
+9. **パスは URL ではない**: ページ共有 URL は `/pages/:id` のまま。パスをコピーしてもページ URL にはならない。ディレクトリだけ `?dir` で共有できる。
+10. **Wiki リンクの特殊文字**: `|`、`[`、`]`、改行を含むパスは Wiki リンクで表現しにくい。既存タイトルと同じ制約として残る。必要なら別 contract。
+11. **case / Unicode**: 比較は case-sensitive で、Unicode 正規化をしない。`A` と `a`、NFC と NFD は別パスになる。既存データを書き換えないための割り切り。
+12. **UI の深いパス**: 深いツリー、長いセグメント、モバイル幅で折りたたみとインデントが破綻しないか確認する。
+13. **409 の UX**: 衝突相手を表示しないと、ユーザーがなぜ保存できないか分からない。API の `conflicts` を UI で必ず表示する。
+14. **migration の二重適用**: アプリの `meta` marker と Wrangler の migrations 管理を同じ DB に二重適用しない。自動適用を正とする。
+15. **自動改名しない運用負担**: 衝突解消の判断を人間に残すため、移行時に内容・履歴・リンクを確認するコストがかかる。これはデータを壊さないための意図的な選択。
 
-## 12. 推奨する実装順と最初の PR
+## 10. 次のアクション
 
-1. **この PR**: `docs/page-directory.md`。contract をレビューで固定する。
-2. **PR #19 の取り込み**: `feat/scale` を main にマージするか、directory branch を `feat/scale` に rebase する。`listPageNavigation` / `PageSlice` / migration runner / `tests/helpers/d1.ts` を前提にする。
-3. **migration + backend API**: `migrations/0002_directory.sql`、`meta['migration:0002_directory']`、`PRAGMA table_info` ガード、`TypeScript` の `parentId`、`listPageNavigation` 拡張、`GET /api/pages/tree`、`updatePageParent`、祖先取得、削除ガード、復元のルート復帰。`tests/pageDirectory.test.ts` を SQLite integration で同時に入れる。
-4. **frontend tree / breadcrumbs**: backend PR のマージ後に、`pageTree.ts` と `AppShell` を実装する。loader は既存の `listPageNavigation` 経由で `parentId` を渡す。
-5. **移動・削除 UX**: 409 の説明、子ページ作成、移動メニュー。
-6. **将来の `page_link`**: PR #19 では未導入。導入する場合も、リンク解決はグローバルな title / alias 規則を共通 contract とし、ディレクトリの `parentId` には依存させない。
-
-最初に切るブランチは `docs/page-directory`（この PR）。実装の最初のブランチは `feat/page-directory-api` とし、`feat/page-directory-ui` はその後。`feat/scale`（PR #19）と並行する場合は、**migration runner と `PageNavigation` 型を先に main へ入れてから**、directory の `0002_directory` を別 PR に分ける。
+1. このドキュメントをレビューし、パス方式の contract を固定する。
+2. PR 2 で `parsePagePath`、`0002_path_uniqueness.sql`、trigger-aware runner、監査 preflight、409 マッピングを実装する。
+3. 本番相当データで監査 SQL を dry-run し、衝突件数と解消計画を確認する。
+4. PR 3 で PageTree / `?dir` scope / autocomplete / パンくずを実装する。
+5. PR 4 で検索・Wiki リンクのフルパス表示と解決を固定する。
+6. 空ディレクトリ、ディレクトリ rename、scope 検索、パス URL は必要になった時点で別 contract にする。
