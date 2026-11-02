@@ -15,7 +15,7 @@ import remarkGfm from 'remark-gfm';
 import rehypeSanitize, { defaultSchema } from 'rehype-sanitize';
 import rehypeHighlight from 'rehype-highlight';
 import { Badge, Button, Text } from '@cloudflare/kumo';
-import { CheckIcon, CopyIcon, ListBulletsIcon, XIcon } from '@phosphor-icons/react';
+import { CheckIcon, CopyIcon } from '@phosphor-icons/react';
 import { createPageByPath } from '../client/pagePathApi';
 import type { Backlink } from '../server/backlinks';
 import type { PageNavigation } from '../server/types';
@@ -24,6 +24,12 @@ import { sameToc, type TocItem } from '../markdown/toc';
 import { createWikiResolver, remarkWikiLinks, type LinkTarget } from '../markdown/wiki';
 import { validatePagePath } from '../shared/pagePath';
 
+export type SidePanelInfo = {
+  available: boolean;
+  hasToc: boolean;
+  hasBacklinks: boolean;
+};
+
 type Props = {
   markdown: string;
   pages: PageNavigation[];
@@ -31,6 +37,8 @@ type Props = {
   pageId: string;
   pageTitle: string;
   sidePanel?: boolean;
+  sidePanelOpen: boolean;
+  onSidePanelInfoChange?: (info: SidePanelInfo) => void;
 };
 
 type HastNode = {
@@ -50,8 +58,6 @@ const sanitizeSchema = {
   },
 };
 
-const SIDE_PANEL_STORAGE_KEY = 'zeee.read-side-panel.v1';
-
 export function MarkdownView({
   markdown,
   pages,
@@ -59,10 +65,11 @@ export function MarkdownView({
   pageId,
   pageTitle,
   sidePanel = true,
+  sidePanelOpen,
+  onSidePanelInfoChange,
 }: Props) {
   const articleRef = useRef<HTMLElement>(null);
   const [toc, setToc] = useState<TocItem[]>([]);
-  const [sidePanelOpen, setSidePanelOpen] = useState(true);
   const [backlinks, setBacklinks] = useState<Backlink[] | null>(null);
   const [backlinksError, setBacklinksError] = useState(false);
   const [backlinksRetry, setBacklinksRetry] = useState(0);
@@ -71,30 +78,6 @@ export function MarkdownView({
     [linkTargets, pages],
   );
   const resolve = useMemo(() => createWikiResolver(targets), [targets]);
-  const sidePanelRestoredRef = useRef(false);
-  const lastSidePanelOpenRef = useRef(sidePanelOpen);
-
-  useEffect(() => {
-    if (sidePanelRestoredRef.current) return;
-    sidePanelRestoredRef.current = true;
-    try {
-      const stored = window.localStorage.getItem(SIDE_PANEL_STORAGE_KEY);
-      if (stored !== 'open' && stored !== 'closed') return;
-      setSidePanelOpen(stored === 'open');
-    } catch {
-      return;
-    }
-  }, []);
-
-  useEffect(() => {
-    if (!sidePanelRestoredRef.current || sidePanelOpen === lastSidePanelOpenRef.current) return;
-    lastSidePanelOpenRef.current = sidePanelOpen;
-    try {
-      window.localStorage.setItem(SIDE_PANEL_STORAGE_KEY, sidePanelOpen ? 'open' : 'closed');
-    } catch {
-      return;
-    }
-  }, [sidePanelOpen]);
 
   useEffect(() => {
     const root = articleRef.current;
@@ -206,11 +189,14 @@ export function MarkdownView({
   const panelAvailable = sidePanel && hasSidePanelContent;
   const showSidePanel = panelAvailable && sidePanelOpen;
   const wideProse = panelAvailable && !sidePanelOpen;
-  const sidePanelLabel = hasToc
-    ? hasBacklinks || backlinksError
-      ? '目次とバックリンク'
-      : '目次'
-    : 'バックリンク';
+
+  useEffect(() => {
+    onSidePanelInfoChange?.({
+      available: hasSidePanelContent,
+      hasToc,
+      hasBacklinks: hasBacklinks || backlinksError,
+    });
+  }, [hasSidePanelContent, hasToc, hasBacklinks, backlinksError, onSidePanelInfoChange]);
 
   return (
     <div className="min-h-[60svh] px-5 py-7 sm:px-8 sm:py-9 lg:min-h-[calc(100vh-18rem)]">
@@ -222,24 +208,6 @@ export function MarkdownView({
         }
       >
         <div className={wideProse ? 'min-w-0 max-w-[52rem]' : 'min-w-0'}>
-          {panelAvailable ? (
-            <div className="mb-3 hidden justify-end xl:flex">
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                icon={sidePanelOpen ? <XIcon size={14} /> : <ListBulletsIcon size={14} />}
-                aria-expanded={sidePanelOpen}
-                aria-controls="page-side-panel"
-                title={`${sidePanelLabel}を${sidePanelOpen ? '閉じる' : '開く'}`}
-                onClick={() => setSidePanelOpen((open) => !open)}
-                className="h-8"
-              >
-                {sidePanelLabel}を{sidePanelOpen ? '閉じる' : '開く'}
-              </Button>
-            </div>
-          ) : null}
-
           {showMobileToc ? (
             <details className="mb-5 border-b border-kumo-line pb-3 xl:hidden">
               <summary className="cursor-pointer py-2 text-sm font-medium text-kumo-strong">

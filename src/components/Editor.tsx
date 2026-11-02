@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type * as Y from 'yjs';
 import type { Awareness } from 'y-protocols/awareness';
 import { useRouter } from '@void/react';
@@ -10,6 +10,7 @@ import {
   DotsThreeIcon,
   EyeIcon,
   FloppyDiskIcon,
+  ListBulletsIcon,
   PencilSimpleIcon,
   TrashIcon,
   XIcon,
@@ -22,6 +23,7 @@ import { formatDate } from '../shared/format';
 import { pagePathName, validatePagePath } from '../shared/pagePath';
 import { PagePathInput } from './PagePathInput';
 import { RevisionPreview } from './RevisionPreview';
+import type { SidePanelInfo } from './MarkdownView';
 
 const CodeEditor = lazy(() => import('./CodeEditor'));
 const MarkdownView = lazy(() =>
@@ -30,6 +32,8 @@ const MarkdownView = lazy(() =>
 
 const editorClassName =
   'min-h-[calc(60svh-3.5rem)] w-full flex-1 lg:min-h-[calc(100vh-18rem-4.5rem)]';
+
+const SIDE_PANEL_STORAGE_KEY = 'zeee.read-side-panel.v1';
 
 type Props = {
   page: PageRecord;
@@ -66,6 +70,14 @@ export function Editor({ page, user, revisions, pages, linkTargets }: Props) {
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleteError, setDeleteError] = useState('');
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [sidePanelOpen, setSidePanelOpen] = useState(true);
+  const [sidePanelInfo, setSidePanelInfo] = useState<SidePanelInfo>({
+    available: false,
+    hasToc: false,
+    hasBacklinks: false,
+  });
+  const sidePanelRestoredRef = useRef(false);
+  const lastSidePanelOpenRef = useRef(sidePanelOpen);
   const [previewRevision, setPreviewRevision] = useState<RevisionRecord | null>(null);
   const [restoreBusy, setRestoreBusy] = useState(false);
   const [restoreError, setRestoreError] = useState('');
@@ -188,6 +200,38 @@ export function Editor({ page, user, revisions, pages, linkTargets }: Props) {
     window.addEventListener('beforeunload', handleBeforeUnload);
     return () => window.removeEventListener('beforeunload', handleBeforeUnload);
   }, [title, savedTitle, saveStatus.pending, saveStatus.state]);
+
+  useEffect(() => {
+    if (sidePanelRestoredRef.current) return;
+    sidePanelRestoredRef.current = true;
+    try {
+      const stored = window.localStorage.getItem(SIDE_PANEL_STORAGE_KEY);
+      if (stored !== 'open' && stored !== 'closed') return;
+      setSidePanelOpen(stored === 'open');
+    } catch {
+      return;
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!sidePanelRestoredRef.current || sidePanelOpen === lastSidePanelOpenRef.current) return;
+    lastSidePanelOpenRef.current = sidePanelOpen;
+    try {
+      window.localStorage.setItem(SIDE_PANEL_STORAGE_KEY, sidePanelOpen ? 'open' : 'closed');
+    } catch {
+      return;
+    }
+  }, [sidePanelOpen]);
+
+  const handleSidePanelInfoChange = useCallback((next: SidePanelInfo) => {
+    setSidePanelInfo((current) =>
+      current.available === next.available &&
+      current.hasToc === next.hasToc &&
+      current.hasBacklinks === next.hasBacklinks
+        ? current
+        : next,
+    );
+  }, []);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -334,6 +378,13 @@ export function Editor({ page, user, revisions, pages, linkTargets }: Props) {
   }
 
   const others = users.filter((item) => item.name !== user.displayName);
+  const sidePanelToggleLabel = sidePanelInfo.hasToc ? '目次' : 'バックリンク';
+  const sidePanelActionLabel = sidePanelInfo.hasToc
+    ? sidePanelInfo.hasBacklinks
+      ? '目次とバックリンク'
+      : '目次'
+    : 'バックリンク';
+  const showSidePanelToggle = mode === 'read' && !historyOpen && sidePanelInfo.available;
 
   return (
     <div className="flex w-full flex-col gap-4">
@@ -401,6 +452,20 @@ export function Editor({ page, user, revisions, pages, linkTargets }: Props) {
               >
                 {mode === 'read' ? '編集' : '閲覧'}
               </Button>
+              {showSidePanelToggle ? (
+                <Button
+                  type="button"
+                  variant="secondary"
+                  icon={sidePanelOpen ? <XIcon size={15} /> : <ListBulletsIcon size={15} />}
+                  onClick={() => setSidePanelOpen((open) => !open)}
+                  aria-pressed={sidePanelOpen}
+                  aria-controls="page-side-panel"
+                  title={`${sidePanelActionLabel}を${sidePanelOpen ? '閉じる' : '開く'}`}
+                  className="hidden xl:inline-flex"
+                >
+                  {sidePanelToggleLabel}
+                </Button>
+              ) : null}
               <Button
                 type="button"
                 variant="secondary"
@@ -496,6 +561,8 @@ export function Editor({ page, user, revisions, pages, linkTargets }: Props) {
                   pageId={page.id}
                   pageTitle={savedTitle}
                   sidePanel={!historyOpen}
+                  sidePanelOpen={sidePanelOpen}
+                  onSidePanelInfoChange={handleSidePanelInfoChange}
                 />
               </Suspense>
             ) : (
