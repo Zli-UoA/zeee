@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Link } from '@void/react';
 import { Button, LinkProvider, Sidebar, Text, useSidebar } from '@cloudflare/kumo';
 import {
@@ -132,6 +132,7 @@ export function AppShell({
   return (
     <LinkProvider component={AppLink}>
       <Sidebar.Provider collapsible="offcanvas" className="min-h-svh bg-kumo-canvas">
+        <SidebarPreference />
         <CloseMobileSidebarOnNavigate
           activePageId={activePageId}
           activeNav={activeNav}
@@ -139,72 +140,20 @@ export function AppShell({
           dir={dir}
         />
         <SkipToContent />
-        <Sidebar id="pages-nav" className="md:sticky md:top-0 md:h-svh">
-          <Sidebar.Header className="h-14 justify-between px-3.5">
-            <Brand />
-            <Sidebar.Close className="size-8 md:hidden" aria-label="ページ一覧を閉じる" />
-          </Sidebar.Header>
-
-          <Sidebar.Content>
-            {sidebarRecentPages.length > 0 ? (
-              <Sidebar.Group>
-                <Sidebar.GroupLabel>最近見たページ</Sidebar.GroupLabel>
-                <Sidebar.Menu>
-                  {sidebarRecentPages.map((page) => (
-                    <Sidebar.MenuButton
-                      href={`/pages/${page.id}`}
-                      size="sm"
-                      icon={ClockCounterClockwiseIcon}
-                      active={page.id === activePageId}
-                      aria-current={page.id === activePageId ? 'page' : undefined}
-                      key={page.id}
-                    >
-                      {page.title}
-                    </Sidebar.MenuButton>
-                  ))}
-                </Sidebar.Menu>
-              </Sidebar.Group>
-            ) : null}
-
-            <Sidebar.Group>
-              <Sidebar.GroupLabel>すべてのページ</Sidebar.GroupLabel>
-              <div className="px-1.5">
-                <PageTree
-                  pages={livePages}
-                  activePageId={activePageId}
-                  activeTitle={liveTitle}
-                  activeDirectory={dir}
-                />
-              </div>
-            </Sidebar.Group>
-
-            {livePages.length === 0 ? (
-              <div className="px-3 py-3">
-                <Text variant="secondary" size="sm">
-                  まだページがありません。
-                </Text>
-              </div>
-            ) : null}
-          </Sidebar.Content>
-
-          <Sidebar.Footer>
-            <Sidebar.Menu className="w-full">
-              <Sidebar.MenuButton
-                href="/trash"
-                icon={TrashIcon}
-                active={isTrash}
-                aria-current={isTrash ? 'page' : undefined}
-              >
-                ゴミ箱
-              </Sidebar.MenuButton>
-            </Sidebar.Menu>
-          </Sidebar.Footer>
-        </Sidebar>
+        <AppSidebar
+          pages={livePages}
+          recentPages={sidebarRecentPages}
+          activePageId={activePageId}
+          liveTitle={liveTitle}
+          activeDirectory={dir}
+          isTrash={isTrash}
+        />
 
         <div className="flex min-w-0 flex-1 flex-col">
           <header className="sticky top-0 z-30 h-14 border-b border-kumo-line bg-kumo-base/90 backdrop-blur">
             <div className="mx-auto flex h-full w-full max-w-[1100px] items-center gap-2 px-4 sm:px-6 lg:px-8">
               <MobileNavButton />
+              <DesktopSidebarToggle />
 
               <div className="min-w-0 md:hidden">
                 <span className="block truncate text-sm font-medium text-kumo-strong">
@@ -290,6 +239,126 @@ export function AppShell({
   );
 }
 
+const SIDEBAR_OPEN_STORAGE_KEY = 'zeee.sidebar-open.v1';
+
+type AppSidebarProps = {
+  pages: PageNavigation[];
+  recentPages: RecentPage[];
+  activePageId?: string;
+  liveTitle?: string;
+  activeDirectory?: string;
+  isTrash: boolean;
+};
+
+function AppSidebar({
+  pages,
+  recentPages,
+  activePageId,
+  liveTitle,
+  activeDirectory,
+  isTrash,
+}: AppSidebarProps) {
+  const { open, isMobile } = useSidebar();
+
+  return (
+    <Sidebar
+      id="pages-nav"
+      className="md:sticky md:top-0 md:h-svh"
+      inert={!isMobile && !open ? true : undefined}
+    >
+      <Sidebar.Header className="h-14 justify-between px-3.5">
+        <Brand />
+        <Sidebar.Close className="size-8 md:hidden" aria-label="ページ一覧を閉じる" />
+      </Sidebar.Header>
+
+      <Sidebar.Content>
+        {recentPages.length > 0 ? (
+          <Sidebar.Group>
+            <Sidebar.GroupLabel>最近見たページ</Sidebar.GroupLabel>
+            <Sidebar.Menu>
+              {recentPages.map((page) => (
+                <Sidebar.MenuButton
+                  href={`/pages/${page.id}`}
+                  size="sm"
+                  icon={ClockCounterClockwiseIcon}
+                  active={page.id === activePageId}
+                  aria-current={page.id === activePageId ? 'page' : undefined}
+                  key={page.id}
+                >
+                  {page.title}
+                </Sidebar.MenuButton>
+              ))}
+            </Sidebar.Menu>
+          </Sidebar.Group>
+        ) : null}
+
+        <Sidebar.Group>
+          <Sidebar.GroupLabel>すべてのページ</Sidebar.GroupLabel>
+          <div className="px-1.5">
+            <PageTree
+              pages={pages}
+              activePageId={activePageId}
+              activeTitle={liveTitle}
+              activeDirectory={activeDirectory}
+            />
+          </div>
+        </Sidebar.Group>
+
+        {pages.length === 0 ? (
+          <div className="px-3 py-3">
+            <Text variant="secondary" size="sm">
+              まだページがありません。
+            </Text>
+          </div>
+        ) : null}
+      </Sidebar.Content>
+
+      <Sidebar.Footer>
+        <Sidebar.Menu className="w-full">
+          <Sidebar.MenuButton
+            href="/trash"
+            icon={TrashIcon}
+            active={isTrash}
+            aria-current={isTrash ? 'page' : undefined}
+          >
+            ゴミ箱
+          </Sidebar.MenuButton>
+        </Sidebar.Menu>
+      </Sidebar.Footer>
+    </Sidebar>
+  );
+}
+
+function SidebarPreference() {
+  const { open, setOpen, isMobile } = useSidebar();
+  const restoredRef = useRef(false);
+  const lastOpenRef = useRef(open);
+
+  useEffect(() => {
+    if (restoredRef.current) return;
+    restoredRef.current = true;
+    try {
+      const stored = window.localStorage.getItem(SIDEBAR_OPEN_STORAGE_KEY);
+      if (stored !== 'open' && stored !== 'closed') return;
+      setOpen(stored === 'open');
+    } catch {
+      return;
+    }
+  }, [setOpen]);
+
+  useEffect(() => {
+    if (isMobile || open === lastOpenRef.current) return;
+    lastOpenRef.current = open;
+    try {
+      window.localStorage.setItem(SIDEBAR_OPEN_STORAGE_KEY, open ? 'open' : 'closed');
+    } catch {
+      return;
+    }
+  }, [open, isMobile]);
+
+  return null;
+}
+
 function CloseMobileSidebarOnNavigate({
   activePageId,
   activeNav,
@@ -318,6 +387,19 @@ function SkipToContent() {
     >
       本文へスキップ
     </a>
+  );
+}
+
+function DesktopSidebarToggle() {
+  const { open } = useSidebar();
+
+  return (
+    <Sidebar.Trigger
+      aria-label={open ? 'ページ一覧を閉じる' : 'ページ一覧を開く'}
+      aria-controls="pages-nav"
+      title={open ? 'ページ一覧を閉じる' : 'ページ一覧を開く'}
+      className="hidden md:flex"
+    />
   );
 }
 

@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useId, useRef } from 'react';
 import type * as Y from 'yjs';
 import type { Awareness } from 'y-protocols/awareness';
 import {
@@ -6,9 +6,10 @@ import {
   type CompletionResult,
   type CompletionSource,
 } from '@codemirror/autocomplete';
+import { indentWithTab, simplifySelection, temporarilySetTabFocusMode } from '@codemirror/commands';
 import { EditorView, basicSetup } from 'codemirror';
 import { Prec } from '@codemirror/state';
-import { keymap } from '@codemirror/view';
+import { keymap, type Command } from '@codemirror/view';
 import { markdown as markdownLanguage } from '@codemirror/lang-markdown';
 import { yCollab, yUndoManagerKeymap } from 'y-codemirror.next';
 import {
@@ -26,6 +27,15 @@ type Props = {
   targets: LinkTarget[];
   className?: string;
 };
+
+const escapeToTabFocus: Command = (view) => {
+  if (view.composing) return false;
+  if (view.dom.querySelector('.cm-search')) return false;
+  simplifySelection(view);
+  return temporarilySetTabFocusMode(view);
+};
+
+const markdownEditingKeymap = [indentWithTab, { key: 'Escape', run: escapeToTabFocus }];
 
 const editorTheme = EditorView.theme({
   '&': {
@@ -54,6 +64,7 @@ const editorTheme = EditorView.theme({
 
 export default function CodeEditor({ text, awareness, undoManager, targets, className }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const helpId = useId();
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -62,19 +73,30 @@ export default function CodeEditor({ text, awareness, undoManager, targets, clas
       extensions: [
         basicSetup,
         Prec.high(keymap.of(yUndoManagerKeymap)),
+        Prec.high(keymap.of(markdownEditingKeymap)),
         markdownLanguage(),
         autocompletion({ override: [wikiCompletionSource(targets)] }),
         EditorView.lineWrapping,
-        EditorView.contentAttributes.of({ 'aria-label': '本文' }),
+        EditorView.contentAttributes.of({
+          'aria-label': '本文',
+          'aria-describedby': helpId,
+        }),
         editorTheme,
         yCollab(text, awareness, { undoManager }),
       ],
       parent: containerRef.current,
     });
     return () => view.destroy();
-  }, [text, awareness, undoManager, targets]);
+  }, [text, awareness, undoManager, targets, helpId]);
 
-  return <div className={className} ref={containerRef} />;
+  return (
+    <div className={className} ref={containerRef}>
+      <span id={helpId} className="sr-only">
+        Tab でインデント、Shift+Tab でアウトデントします。エディタの外へ移動するには Escape
+        を押してから Tab を押してください。
+      </span>
+    </div>
+  );
 }
 
 function wikiCompletionSource(targets: LinkTarget[]): CompletionSource {
