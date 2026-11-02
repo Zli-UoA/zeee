@@ -52,6 +52,13 @@ body {
   }
 }
 
+@media (prefers-reduced-motion: reduce) {
+  .zeee-app-shell [data-sidebar='content-container'],
+  #page-history-panel {
+    transition: none;
+  }
+}
+
 .cm-editor {
   height: 100%;
   background: transparent;

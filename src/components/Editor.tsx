@@ -617,7 +617,7 @@ export function Editor({ page, user, revisions, pages, linkTargets }: Props) {
             tabIndex={-1}
             className={
               historyModal
-                ? 'fixed inset-y-0 right-0 z-50 flex w-[min(20rem,85vw)] flex-col border-l border-kumo-line bg-kumo-base shadow-2xl focus:outline-none'
+                ? 'fixed inset-y-0 right-0 z-50 flex w-full flex-col border-l border-kumo-line bg-kumo-base shadow-2xl focus:outline-none'
                 : 'fixed top-36 right-0 bottom-0 z-20 hidden w-[280px] flex-col border-l border-kumo-line bg-kumo-base shadow-lg focus:outline-none xl:flex'
             }
           >

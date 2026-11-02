@@ -24,12 +24,6 @@ import { sameToc, type TocItem } from '../markdown/toc';
 import { createWikiResolver, remarkWikiLinks, type LinkTarget } from '../markdown/wiki';
 import { validatePagePath } from '../shared/pagePath';
 
-export type SidePanelInfo = {
-  available: boolean;
-  hasToc: boolean;
-  hasBacklinks: boolean;
-};
-
 type Props = {
   markdown: string;
   pages: PageNavigation[];
@@ -39,7 +33,6 @@ type Props = {
   sidePanel?: boolean;
   sidePanelOpen: boolean;
   onSidePanelOpenChange?: (open: boolean) => void;
-  onSidePanelInfoChange?: (info: SidePanelInfo) => void;
 };
 
 type HastNode = {
@@ -68,7 +61,6 @@ export function MarkdownView({
   sidePanel = true,
   sidePanelOpen,
   onSidePanelOpenChange,
-  onSidePanelInfoChange,
 }: Props) {
   const articleRef = useRef<HTMLElement>(null);
   const tocTabRef = useRef<HTMLButtonElement>(null);
@@ -205,14 +197,6 @@ export function MarkdownView({
     requestAnimationFrame(() => tocTabRef.current?.focus());
   }
 
-  useEffect(() => {
-    onSidePanelInfoChange?.({
-      available: hasSidePanelContent,
-      hasToc,
-      hasBacklinks: hasBacklinks || backlinksError,
-    });
-  }, [hasSidePanelContent, hasToc, hasBacklinks, backlinksError, onSidePanelInfoChange]);
-
   return (
     <div className="relative min-h-[60svh] px-5 py-7 sm:px-8 sm:py-9 lg:min-h-[calc(100vh-18rem)]">
       {panelAvailable && !sidePanelOpen ? (
@@ -224,7 +208,7 @@ export function MarkdownView({
           aria-expanded={false}
           aria-controls="page-side-panel"
           title={`${panelLabel}を開く`}
-          className="absolute top-28 left-0 z-10 hidden w-6 items-center justify-center rounded-r-md border border-l-0 border-kumo-line bg-kumo-base py-3 text-[11px] font-medium text-kumo-subtle hover:bg-kumo-tint hover:text-kumo-default focus-visible:ring-2 focus-visible:ring-kumo-brand focus-visible:outline-none xl:flex"
+          className="absolute top-28 left-0 z-10 hidden h-24 w-8 -translate-x-px flex-col items-center justify-center rounded-r-lg border border-l-0 border-kumo-line bg-kumo-tint text-xs font-semibold text-kumo-strong shadow-sm hover:bg-kumo-base hover:text-kumo-default focus-visible:ring-2 focus-visible:ring-kumo-brand focus-visible:outline-none xl:flex"
           style={{ writingMode: 'vertical-rl' }}
         >
           {panelLabel}
