@@ -1,4 +1,4 @@
-import { useEffect, useId, useState, type FormEvent } from 'react';
+import { useEffect, useId, useMemo, useState, type FormEvent } from 'react';
 import { useRouter } from '@void/react';
 import { Button, Text } from '@cloudflare/kumo';
 import { PlusIcon } from '@phosphor-icons/react';
@@ -25,23 +25,30 @@ export function PagePathCreateForm({
 }: Props) {
   const router = useRouter();
   const errorId = useId();
+  const hintId = useId();
   const [title, setTitle] = useState(defaultValue);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [dirty, setDirty] = useState(false);
+  const [submitted, setSubmitted] = useState(false);
+  const validation = useMemo(
+    () => (title.trim() ? validatePagePath(title, pages) : null),
+    [title, pages],
+  );
 
   useEffect(() => {
     setTitle(defaultValue);
     setError('');
+    setDirty(false);
+    setSubmitted(false);
   }, [defaultValue]);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (busy) return;
+    setSubmitted(true);
     const validation = validatePagePath(title, pages);
-    if (!validation.ok) {
-      setError(validation.message);
-      return;
-    }
+    if (!validation.ok) return;
     setBusy(true);
     setError('');
     const result = await createPageByPath(validation.path);
@@ -52,6 +59,15 @@ export function PagePathCreateForm({
     }
     void router.visit(`/pages/${result.id}`);
   }
+
+  const showValidation = dirty || submitted;
+  const visibleError =
+    error || (showValidation && validation && !validation.ok ? validation.message : '');
+  const hint =
+    !visibleError && !dirty && !submitted && title.trim().endsWith('/')
+      ? 'ページ名を入力してください。'
+      : '';
+  const descriptionId = visibleError ? errorId : hint ? hintId : undefined;
 
   return (
     <form
@@ -65,6 +81,7 @@ export function PagePathCreateForm({
           value={title}
           onChange={(value) => {
             setTitle(value);
+            setDirty(true);
             if (error) setError('');
           }}
           pages={pages}
@@ -74,17 +91,21 @@ export function PagePathCreateForm({
           required
           maxLength={200}
           autoFocus={autoFocus}
-          invalid={Boolean(error)}
-          errorId={errorId}
+          invalid={Boolean(visibleError)}
+          errorId={descriptionId}
           className="min-w-0 flex-1"
         />
         <Button type="submit" variant="primary" icon={<PlusIcon size={14} />} loading={busy}>
           {submitLabel}
         </Button>
       </div>
-      {error ? (
+      {visibleError ? (
         <Text id={errorId} variant="error" size="sm" role="alert">
-          {error}
+          {visibleError}
+        </Text>
+      ) : hint ? (
+        <Text id={hintId} variant="secondary" size="sm">
+          {hint}
         </Text>
       ) : null}
     </form>

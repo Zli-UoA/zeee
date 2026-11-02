@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vite-plus/test';
 import { PathSuggestionListbox, PagePathInput } from '../src/components/PagePathInput';
 import { PagePathBreadcrumb } from '../src/components/PagePathBreadcrumb';
+import { PagePathCreateForm } from '../src/components/PagePathCreateForm';
 import { PageTree } from '../src/components/PageTree';
 import { directorySuggestions, type PagePathPage } from '../src/shared/pagePath';
 
@@ -18,6 +19,7 @@ vi.mock('@void/react', async () => {
       children?: ReactNode;
       [key: string]: unknown;
     }) => h('a', { href, ...props }, children),
+    useRouter: () => ({ visit: () => {} }),
   };
 });
 
@@ -74,6 +76,34 @@ describe('PagePathBreadcrumb UI', () => {
     expect(html).toContain('href="/?dir=a%2Fb"');
     expect(html).toContain('aria-current="page"');
     expect(html).toContain('>c</span>');
+  });
+});
+
+describe('PagePathCreateForm UI', () => {
+  it('shows a neutral hint instead of an error for an untouched directory path', () => {
+    const html = renderToStaticMarkup(
+      createElement(PagePathCreateForm, {
+        pages: [page('p1', 'engineering/platform/api')],
+        defaultValue: 'engineering/platform/',
+        ariaLabel: 'このディレクトリに新規ページのパス',
+      }),
+    );
+
+    expect(html).toContain('ページ名を入力してください。');
+    expect(html).not.toContain('role="alert"');
+    expect(html).not.toContain('aria-invalid="true"');
+  });
+
+  it('does not show a hint or error for a complete untouched path', () => {
+    const html = renderToStaticMarkup(
+      createElement(PagePathCreateForm, {
+        pages: [page('p1', 'engineering/platform/api')],
+        defaultValue: 'engineering/platform/new',
+      }),
+    );
+
+    expect(html).not.toContain('ページ名を入力してください。');
+    expect(html).not.toContain('role="alert"');
   });
 });
 

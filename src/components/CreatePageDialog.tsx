@@ -16,10 +16,13 @@ export function CreatePageDialog({ open, onOpenChange, pages, initialDirectory =
   const router = useRouter();
   const formId = useId();
   const errorId = useId();
+  const hintId = useId();
   const inputRef = useRef<HTMLInputElement>(null);
   const [title, setTitle] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [dirty, setDirty] = useState(false);
+  const [submitted, setSubmitted] = useState(false);
   const validation = useMemo(
     () => (title.trim() ? validatePagePath(title, pages) : null),
     [title, pages],
@@ -30,12 +33,15 @@ export function CreatePageDialog({ open, onOpenChange, pages, initialDirectory =
     setTitle(initialPagePath(initialDirectory));
     setBusy(false);
     setError('');
+    setDirty(false);
+    setSubmitted(false);
     const timer = window.setTimeout(() => inputRef.current?.focus(), 0);
     return () => window.clearTimeout(timer);
   }, [open, initialDirectory]);
 
   async function createPage() {
     if (busy) return;
+    setSubmitted(true);
     const result = validatePagePath(title, pages);
     if (!result.ok) {
       setError(result.message);
@@ -53,7 +59,14 @@ export function CreatePageDialog({ open, onOpenChange, pages, initialDirectory =
     void router.visit(`/pages/${created.id}`);
   }
 
-  const visibleError = error || (validation && !validation.ok ? validation.message : '');
+  const showValidation = dirty || submitted;
+  const visibleError =
+    error || (showValidation && validation && !validation.ok ? validation.message : '');
+  const hint =
+    !visibleError && !dirty && !submitted && title.trim().endsWith('/')
+      ? 'ページ名を入力してください。'
+      : '';
+  const descriptionId = visibleError ? errorId : hint ? hintId : undefined;
 
   return (
     <LayerDialog.Root
@@ -82,6 +95,7 @@ export function CreatePageDialog({ open, onOpenChange, pages, initialDirectory =
               value={title}
               onChange={(value) => {
                 setTitle(value);
+                setDirty(true);
                 if (error) setError('');
               }}
               pages={pages}
@@ -90,11 +104,15 @@ export function CreatePageDialog({ open, onOpenChange, pages, initialDirectory =
               required
               maxLength={200}
               invalid={Boolean(visibleError)}
-              errorId={visibleError ? errorId : undefined}
+              errorId={descriptionId}
             />
             {visibleError ? (
               <Text id={errorId} variant="error" size="sm" role="alert">
                 {visibleError}
+              </Text>
+            ) : hint ? (
+              <Text id={hintId} variant="secondary" size="sm">
+                {hint}
               </Text>
             ) : null}
           </form>
