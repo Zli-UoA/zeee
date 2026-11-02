@@ -25,6 +25,26 @@ import {
 const EXCERPT_LENGTH = 180;
 const EXCERPT_SOURCE_LENGTH = 1000;
 
+export class PathConflictError extends Error {
+  constructor() {
+    super('PATH_CONFLICT');
+    this.name = 'PathConflictError';
+  }
+}
+
+function isPathConflict(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    message.includes('PATH_CONFLICT') ||
+    (message.includes('UNIQUE constraint failed') && message.includes('page.title'))
+  );
+}
+
+function rethrowPathConflict(error: unknown): never {
+  if (isPathConflict(error)) throw new PathConflictError();
+  throw error;
+}
+
 const UPSERT_PAGE_ALIAS = `INSERT INTO page_alias (alias, page_id, created_at) VALUES (?, ?, ?)
   ON CONFLICT(alias) DO UPDATE SET page_id = excluded.page_id, created_at = excluded.created_at`;
 
@@ -487,19 +507,23 @@ export async function createPage(
     .prepare('SELECT display_name FROM app_user WHERE id = ?')
     .bind(userId)
     .first<{ display_name: string }>();
-  await db.batch([
-    db
-      .prepare(
-        'INSERT INTO page (id, title, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?)',
-      )
-      .bind(id, title, userId, timestamp, timestamp),
-    db
-      .prepare('INSERT INTO page_body (page_id, markdown, updated_at) VALUES (?, ?, ?)')
-      .bind(id, '', timestamp),
-    editorStatement(db, id, userId, timestamp),
-    db.prepare('DELETE FROM page_fts WHERE page_id = ?').bind(id),
-    db.prepare('INSERT INTO page_fts (page_id, title, body) VALUES (?, ?, ?)').bind(id, title, ''),
-  ]);
+  await db
+    .batch([
+      db
+        .prepare(
+          'INSERT INTO page (id, title, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?)',
+        )
+        .bind(id, title, userId, timestamp, timestamp),
+      db
+        .prepare('INSERT INTO page_body (page_id, markdown, updated_at) VALUES (?, ?, ?)')
+        .bind(id, '', timestamp),
+      editorStatement(db, id, userId, timestamp),
+      db.prepare('DELETE FROM page_fts WHERE page_id = ?').bind(id),
+      db
+        .prepare('INSERT INTO page_fts (page_id, title, body) VALUES (?, ?, ?)')
+        .bind(id, title, ''),
+    ])
+    .catch(rethrowPathConflict);
   return {
     id,
     title,
@@ -547,7 +571,7 @@ export async function updatePageTitle(
       .bind(pageId),
   );
   if (actorId) statements.push(editorStatement(db, pageId, actorId, timestamp));
-  await db.batch(statements);
+  await db.batch(statements).catch(rethrowPathConflict);
 }
 
 export async function softDeletePage(db: D1Database, pageId: string): Promise<void> {
@@ -564,27 +588,29 @@ export async function softDeletePage(db: D1Database, pageId: string): Promise<vo
 export async function undeletePage(db: D1Database, pageId: string): Promise<boolean> {
   await ensureSchema(db);
   const timestamp = Date.now();
-  const results = await db.batch([
-    db
-      .prepare(
-        'UPDATE page SET deleted_at = NULL, updated_at = ? WHERE id = ? AND deleted_at IS NOT NULL',
-      )
-      .bind(timestamp, pageId),
-    db
-      .prepare(
-        `DELETE FROM page_fts WHERE page_id = ?
+  const results = await db
+    .batch([
+      db
+        .prepare(
+          'UPDATE page SET deleted_at = NULL, updated_at = ? WHERE id = ? AND deleted_at IS NOT NULL',
+        )
+        .bind(timestamp, pageId),
+      db
+        .prepare(
+          `DELETE FROM page_fts WHERE page_id = ?
          AND EXISTS (SELECT 1 FROM page WHERE id = ? AND deleted_at IS NULL AND updated_at = ?)`,
-      )
-      .bind(pageId, pageId, timestamp),
-    db
-      .prepare(
-        `INSERT INTO page_fts (page_id, title, body)
+        )
+        .bind(pageId, pageId, timestamp),
+      db
+        .prepare(
+          `INSERT INTO page_fts (page_id, title, body)
          SELECT p.id, p.title, COALESCE(b.markdown, '') FROM page p
          LEFT JOIN page_body b ON b.page_id = p.id
          WHERE p.id = ? AND p.deleted_at IS NULL AND p.updated_at = ?`,
-      )
-      .bind(pageId, timestamp),
-  ]);
+        )
+        .bind(pageId, timestamp),
+    ])
+    .catch(rethrowPathConflict);
   return (results[0]?.meta.changes ?? 0) > 0;
 }
 
