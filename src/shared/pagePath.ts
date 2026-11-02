@@ -362,6 +362,22 @@ export function validatePagePath(
   return { ok: true, path: parsed.path };
 }
 
+export function pagePathFieldFeedback(
+  title: string,
+  pages: PagePathPage[],
+  options: { dirty: boolean; submitted: boolean; error?: string },
+): { validation: PathValidation; visibleError: string; hint: string } {
+  const validation = validatePagePath(title, pages);
+  const showValidation = options.dirty || options.submitted;
+  const visibleError =
+    options.error || (showValidation && !validation.ok ? validation.message : '');
+  const hint =
+    !visibleError && !options.dirty && !options.submitted && title.trim().endsWith('/')
+      ? 'ページ名を入力してください。'
+      : '';
+  return { validation, visibleError, hint };
+}
+
 export function pathRequestErrorMessage(status: number, code?: string | null): string {
   if (status === 409 || code === PATH_CONFLICT) return PATH_CONFLICT_MESSAGE;
   if (status === 400) return 'パスの形式が正しくありません。入力内容を確認してください。';

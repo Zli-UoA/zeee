@@ -14,6 +14,7 @@ import {
   nextActiveIndex,
   normalizeDirectoryPath,
   pagePathContext,
+  pagePathFieldFeedback,
   pagePathName,
   pagePathSegments,
   pagePathTrail,
@@ -219,6 +220,39 @@ describe('directory suggestions', () => {
     expect(nextActiveIndex(2, 1, 3)).toBe(0);
     expect(nextActiveIndex(0, -1, 3)).toBe(2);
     expect(nextActiveIndex(0, 1, 0)).toBe(-1);
+  });
+});
+
+describe('page path field feedback', () => {
+  const pages = [page('p1', 'a/b')];
+
+  it('shows a neutral hint for an untouched directory path', () => {
+    expect(pagePathFieldFeedback('a/', pages, { dirty: false, submitted: false })).toMatchObject({
+      visibleError: '',
+      hint: 'ページ名を入力してください。',
+    });
+  });
+
+  it('shows an error for empty and whitespace-only submissions', () => {
+    const empty = pagePathFieldFeedback('', pages, { dirty: false, submitted: true });
+    expect(empty.visibleError).toBe('ページ名を入力してください。');
+    expect(empty.hint).toBe('');
+
+    const blank = pagePathFieldFeedback('   ', pages, { dirty: false, submitted: true });
+    expect(blank.visibleError).toBe('ページ名を入力してください。');
+  });
+
+  it('shows validation errors only after input changes or submission', () => {
+    expect(
+      pagePathFieldFeedback('a/', pages, { dirty: false, submitted: false }).visibleError,
+    ).toBe('');
+    expect(pagePathFieldFeedback('a/', pages, { dirty: true, submitted: false }).visibleError).toBe(
+      '末尾の「/」の後にページ名を入れてください。',
+    );
+    expect(pagePathFieldFeedback('a/c', pages, { dirty: false, submitted: false })).toMatchObject({
+      visibleError: '',
+      hint: '',
+    });
   });
 });
 

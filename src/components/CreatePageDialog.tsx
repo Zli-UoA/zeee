@@ -2,7 +2,12 @@ import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useRouter } from '@void/react';
 import { LayerDialog, Text } from '@cloudflare/kumo';
 import { createPageByPath } from '../client/pagePathApi';
-import { initialPagePath, validatePagePath, type PagePathPage } from '../shared/pagePath';
+import {
+  initialPagePath,
+  pagePathFieldFeedback,
+  validatePagePath,
+  type PagePathPage,
+} from '../shared/pagePath';
 import { PagePathInput } from './PagePathInput';
 
 type Props = {
@@ -23,9 +28,9 @@ export function CreatePageDialog({ open, onOpenChange, pages, initialDirectory =
   const [error, setError] = useState('');
   const [dirty, setDirty] = useState(false);
   const [submitted, setSubmitted] = useState(false);
-  const validation = useMemo(
-    () => (title.trim() ? validatePagePath(title, pages) : null),
-    [title, pages],
+  const { validation, visibleError, hint } = useMemo(
+    () => pagePathFieldFeedback(title, pages, { dirty, submitted, error }),
+    [title, pages, dirty, submitted, error],
   );
 
   useEffect(() => {
@@ -59,13 +64,6 @@ export function CreatePageDialog({ open, onOpenChange, pages, initialDirectory =
     void router.visit(`/pages/${created.id}`);
   }
 
-  const showValidation = dirty || submitted;
-  const visibleError =
-    error || (showValidation && validation && !validation.ok ? validation.message : '');
-  const hint =
-    !visibleError && !dirty && !submitted && title.trim().endsWith('/')
-      ? 'ページ名を入力してください。'
-      : '';
   const descriptionId = visibleError ? errorId : hint ? hintId : undefined;
 
   return (
@@ -85,6 +83,7 @@ export function CreatePageDialog({ open, onOpenChange, pages, initialDirectory =
           <form
             id={formId}
             className="flex flex-col gap-3"
+            noValidate
             onSubmit={(event) => {
               event.preventDefault();
               void createPage();
@@ -122,7 +121,7 @@ export function CreatePageDialog({ open, onOpenChange, pages, initialDirectory =
             type="submit"
             form={formId}
             loading={busy}
-            disabled={!title.trim() || busy || (validation !== null && !validation.ok)}
+            disabled={!title.trim() || busy || !validation.ok}
           >
             作成
           </LayerDialog.Action>

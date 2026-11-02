@@ -3,7 +3,7 @@ import { useRouter } from '@void/react';
 import { Button, Text } from '@cloudflare/kumo';
 import { PlusIcon } from '@phosphor-icons/react';
 import { createPageByPath } from '../client/pagePathApi';
-import { validatePagePath, type PagePathPage } from '../shared/pagePath';
+import { pagePathFieldFeedback, validatePagePath, type PagePathPage } from '../shared/pagePath';
 import { PagePathInput } from './PagePathInput';
 
 type Props = {
@@ -31,9 +31,9 @@ export function PagePathCreateForm({
   const [error, setError] = useState('');
   const [dirty, setDirty] = useState(false);
   const [submitted, setSubmitted] = useState(false);
-  const validation = useMemo(
-    () => (title.trim() ? validatePagePath(title, pages) : null),
-    [title, pages],
+  const { visibleError, hint } = useMemo(
+    () => pagePathFieldFeedback(title, pages, { dirty, submitted, error }),
+    [title, pages, dirty, submitted, error],
   );
 
   useEffect(() => {
@@ -60,13 +60,6 @@ export function PagePathCreateForm({
     void router.visit(`/pages/${result.id}`);
   }
 
-  const showValidation = dirty || submitted;
-  const visibleError =
-    error || (showValidation && validation && !validation.ok ? validation.message : '');
-  const hint =
-    !visibleError && !dirty && !submitted && title.trim().endsWith('/')
-      ? 'ページ名を入力してください。'
-      : '';
   const descriptionId = visibleError ? errorId : hint ? hintId : undefined;
 
   return (
@@ -74,6 +67,7 @@ export function PagePathCreateForm({
       method="post"
       action="/"
       className={`flex w-full flex-col gap-2 ${className ?? ''}`}
+      noValidate
       onSubmit={submit}
     >
       <div className="flex w-full items-center gap-2">
