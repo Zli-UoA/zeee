@@ -4,14 +4,20 @@ import {
   buildPageTree,
   collectDirectoryPaths,
   countTreePages,
+  directorySpace,
   directorySuggestions,
+  filterPagesByQuery,
   findDirectoryNode,
+  initialPagePath,
+  listRootPages,
+  listSpaces,
   nextActiveIndex,
   normalizeDirectoryPath,
   pagePathContext,
   pagePathName,
   pagePathSegments,
   pagePathTrail,
+  pageSpace,
   parsePagePath,
   PATH_CONFLICT_MESSAGE,
   pathRequestErrorMessage,
@@ -112,6 +118,61 @@ describe('page tree', () => {
   it('keeps a page and a conflicting legacy directory at the same level', () => {
     const tree = buildPageTree([page('page-a', 'a'), page('page-ab', 'a/b')]);
     expect(tree.map((node) => `${node.kind}:${node.path}`)).toEqual(['directory:a', 'page:a']);
+  });
+});
+
+describe('spaces', () => {
+  const pages = [
+    page('p1', 'engineering/onboarding', 5),
+    page('p2', 'engineering/platform/api', 4),
+    page('p3', 'product/roadmap', 3),
+    page('p4', 'foo', 2),
+    page('p5', '日本語/設計', 1),
+  ];
+
+  it('derives a space from the first segment of nested paths', () => {
+    expect(pageSpace('engineering/onboarding')).toBe('engineering');
+    expect(pageSpace('日本語/設計/詳細')).toBe('日本語');
+    expect(pageSpace('foo')).toBe('');
+    expect(pageSpace('')).toBe('');
+    expect(directorySpace('engineering')).toBe('engineering');
+    expect(directorySpace('engineering/platform')).toBe('engineering');
+    expect(directorySpace('')).toBe('');
+  });
+
+  it('lists top-level directories with recursive page counts', () => {
+    expect(listSpaces(pages)).toEqual([
+      { name: 'engineering', path: 'engineering', pageCount: 2 },
+      { name: 'product', path: 'product', pageCount: 1 },
+      { name: '日本語', path: '日本語', pageCount: 1 },
+    ]);
+    expect(listSpaces([page('nested', 'space/only/deep/page')])).toEqual([
+      { name: 'space', path: 'space', pageCount: 1 },
+    ]);
+  });
+
+  it('lists only top-level pages as root pages', () => {
+    expect(listRootPages(pages).map((node) => node.path)).toEqual(['foo']);
+  });
+
+  it('builds an initial new-page path inside a directory', () => {
+    expect(initialPagePath('engineering/platform')).toBe('engineering/platform/');
+    expect(initialPagePath('engineering/')).toBe('engineering/');
+    expect(initialPagePath('   ')).toBe('');
+    expect(initialPagePath('')).toBe('');
+  });
+
+  it('filters pages by any part of the path, case-insensitively', () => {
+    expect(filterPagesByQuery(pages, 'ENGINEERING').map((item) => item.id)).toEqual(['p1', 'p2']);
+    expect(filterPagesByQuery(pages, '設計').map((item) => item.id)).toEqual(['p5']);
+    expect(filterPagesByQuery(pages, '  ').map((item) => item.id)).toEqual([
+      'p1',
+      'p2',
+      'p3',
+      'p4',
+      'p5',
+    ]);
+    expect(filterPagesByQuery(pages, 'missing')).toEqual([]);
   });
 });
 

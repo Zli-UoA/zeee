@@ -2,16 +2,17 @@ import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useRouter } from '@void/react';
 import { LayerDialog, Text } from '@cloudflare/kumo';
 import { createPageByPath } from '../client/pagePathApi';
-import { validatePagePath, type PagePathPage } from '../shared/pagePath';
+import { initialPagePath, validatePagePath, type PagePathPage } from '../shared/pagePath';
 import { PagePathInput } from './PagePathInput';
 
 type Props = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   pages: PagePathPage[];
+  initialDirectory?: string;
 };
 
-export function CreatePageDialog({ open, onOpenChange, pages }: Props) {
+export function CreatePageDialog({ open, onOpenChange, pages, initialDirectory = '' }: Props) {
   const router = useRouter();
   const formId = useId();
   const errorId = useId();
@@ -26,12 +27,12 @@ export function CreatePageDialog({ open, onOpenChange, pages }: Props) {
 
   useEffect(() => {
     if (!open) return;
-    setTitle('');
+    setTitle(initialPagePath(initialDirectory));
     setBusy(false);
     setError('');
     const timer = window.setTimeout(() => inputRef.current?.focus(), 0);
     return () => window.clearTimeout(timer);
-  }, [open]);
+  }, [open, initialDirectory]);
 
   async function createPage() {
     if (busy) return;

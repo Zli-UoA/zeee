@@ -52,6 +52,17 @@ describe('PageTree UI', () => {
     expect(html).not.toContain('href="/pages/p3"');
     expect(html).not.toContain('href="/?dir=a"');
   });
+
+  it('expands every directory when browsing all pages', () => {
+    const html = renderToStaticMarkup(
+      createElement(PageTree, { pages, variant: 'content', expandAll: true }),
+    );
+
+    expect(html).toContain('href="/pages/p1"');
+    expect(html).toContain('href="/pages/p2"');
+    expect(html).toContain('href="/pages/p3"');
+    expect(html.match(/aria-expanded="true"/g)?.length).toBe(4);
+  });
 });
 
 describe('PagePathBreadcrumb UI', () => {

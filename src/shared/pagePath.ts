@@ -48,6 +48,12 @@ export type DirectorySuggestion = {
   depth: number;
 };
 
+export type SpaceSummary = {
+  name: string;
+  path: string;
+  pageCount: number;
+};
+
 export type PathConflictKind = 'duplicate' | 'page-prefix' | 'directory-prefix';
 
 export type PathValidation =
@@ -127,6 +133,20 @@ export function pagePathName(raw: string): string {
 export function pagePathContext(raw: string): string {
   const segments = pagePathSegments(raw);
   return segments.slice(0, -1).join(' / ');
+}
+
+export function pageSpace(raw: string): string {
+  const segments = pagePathSegments(raw);
+  return segments.length > 1 ? segments[0] : '';
+}
+
+export function directorySpace(raw: string): string {
+  return pagePathSegments(raw)[0] ?? '';
+}
+
+export function initialPagePath(directory: string): string {
+  const normalized = normalizeDirectoryPath(directory);
+  return normalized ? `${normalized}/` : '';
 }
 
 export function ancestorDirectoryPaths(raw: string): string[] {
@@ -230,6 +250,24 @@ export function countTreePages(nodes: PageTreeNode[]): number {
     count += node.kind === 'page' ? 1 : countTreePages(node.children);
   }
   return count;
+}
+
+export function listSpaces(pages: PagePathPage[]): SpaceSummary[] {
+  return buildPageTree(pages).flatMap((node) =>
+    node.kind === 'directory'
+      ? [{ name: node.name, path: node.path, pageCount: countTreePages(node.children) }]
+      : [],
+  );
+}
+
+export function listRootPages(pages: PagePathPage[]): PageTreePageNode[] {
+  return buildPageTree(pages).flatMap((node) => (node.kind === 'page' ? [node] : []));
+}
+
+export function filterPagesByQuery(pages: PagePathPage[], raw: string): PagePathPage[] {
+  const needle = raw.trim().toLocaleLowerCase();
+  if (!needle) return pages;
+  return pages.filter((page) => page.title.toLocaleLowerCase().includes(needle));
 }
 
 export function directorySuggestions(

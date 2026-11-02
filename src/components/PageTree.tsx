@@ -4,6 +4,7 @@ import { CaretRightIcon, FileTextIcon, FolderIcon } from '@phosphor-icons/react'
 import {
   ancestorDirectoryPaths,
   buildPageTree,
+  collectDirectoryPaths,
   scopePageTree,
   type PagePathPage,
   type PageTreeNode,
@@ -17,6 +18,7 @@ type Props = {
   activeDirectory?: string;
   variant?: 'sidebar' | 'content';
   ariaLabel?: string;
+  expandAll?: boolean;
 };
 
 export function PageTree({
@@ -27,6 +29,7 @@ export function PageTree({
   activeDirectory,
   variant = 'sidebar',
   ariaLabel = 'ページツリー',
+  expandAll = false,
 }: Props) {
   const tree = useMemo(() => buildPageTree(pages), [pages]);
   const nodes = useMemo(() => scopePageTree(tree, scope), [tree, scope]);
@@ -43,7 +46,9 @@ export function PageTree({
     }
     return paths;
   }, [activeTitle, activeDirectory, scope]);
-  const [expanded, setExpanded] = useState<Set<string>>(() => new Set(focusPaths));
+  const [expanded, setExpanded] = useState<Set<string>>(
+    () => new Set(expandAll ? collectDirectoryPaths(pages) : focusPaths),
+  );
 
   useEffect(() => {
     setExpanded((current) => {
@@ -52,6 +57,11 @@ export function PageTree({
       return next;
     });
   }, [focusPaths]);
+
+  useEffect(() => {
+    if (!expandAll) return;
+    setExpanded(new Set(collectDirectoryPaths(pages)));
+  }, [expandAll, pages]);
 
   function isExpanded(path: string) {
     return expanded.has(path) || focusPaths.has(path);

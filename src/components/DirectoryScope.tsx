@@ -3,8 +3,14 @@ import { Link } from '@void/react';
 import { Empty, LayerCard, Text } from '@cloudflare/kumo';
 import { FolderIcon } from '@phosphor-icons/react';
 import type { PageNavigation } from '../server/types';
-import { buildPageTree, countTreePages, findDirectoryNode } from '../shared/pagePath';
+import {
+  buildPageTree,
+  countTreePages,
+  findDirectoryNode,
+  initialPagePath,
+} from '../shared/pagePath';
 import { DirectoryPathBreadcrumb } from './PagePathBreadcrumb';
+import { PagePathCreateForm } from './PagePathCreateForm';
 import { PageTree } from './PageTree';
 
 export function DirectoryScope({ pages, dir }: { pages: PageNavigation[]; dir: string }) {
@@ -36,6 +42,17 @@ export function DirectoryScope({ pages, dir }: { pages: PageNavigation[]; dir: s
           配下のページ {count}件
         </Text>
       </div>
+      <section aria-labelledby="directory-create-heading" className="flex flex-col gap-2">
+        <Text as="h2" id="directory-create-heading" variant="heading">
+          このディレクトリに新規ページ
+        </Text>
+        <PagePathCreateForm
+          pages={pages}
+          defaultValue={initialPagePath(dir)}
+          ariaLabel="このディレクトリに新規ページのパス"
+          className="max-w-xl"
+        />
+      </section>
       <LayerCard className="overflow-hidden p-2">
         <PageTree
           pages={pages}

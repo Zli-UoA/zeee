@@ -3,24 +3,33 @@ import { Link } from '@void/react';
 import { Button, LinkProvider, Sidebar, Text, useSidebar } from '@cloudflare/kumo';
 import {
   ClockCounterClockwiseIcon,
+  FileTextIcon,
+  HouseIcon,
   ListIcon,
   MagnifyingGlassIcon,
   PlusIcon,
   SignOutIcon,
   TrashIcon,
+  TreeStructureIcon,
 } from '@phosphor-icons/react';
 import { AppLink } from './AppLink';
 import { CommandPalette } from './CommandPalette';
 import { CreatePageDialog } from './CreatePageDialog';
 import { PagePathBreadcrumb } from './PagePathBreadcrumb';
-import { PageTree } from './PageTree';
+import { SpaceNav } from './SpaceNav';
 import { ZeeeLogo } from './ZeeeLogo';
 import { sidebarPageLists } from '../client/sidebarPages';
 import { useRecentPages, type RecentPage } from '../client/useRecentPages';
-import { pagePathName } from '../shared/pagePath';
+import {
+  directorySpace,
+  listRootPages,
+  pagePathName,
+  pageSpace,
+  parsePagePath,
+} from '../shared/pagePath';
 import type { PageNavigation, SessionUser } from '../server/types';
 
-type NavSection = 'trash';
+type NavSection = 'trash' | 'browse';
 
 type Props = {
   user: SessionUser | null;
@@ -66,6 +75,10 @@ export function AppShell({
   );
 
   const isTrash = activeNav === 'trash';
+  const isBrowse = activeNav === 'browse';
+  const activeSpace = directorySpace(dir ?? '') || pageSpace(liveTitle ?? '');
+  const createInitialDirectory = dir || parsePagePath(liveTitle ?? '')?.parentPath || '';
+  const isHome = !activePageId && !dir && !isTrash && !isBrowse;
 
   useEffect(() => {
     setLivePages(pages);
@@ -229,7 +242,10 @@ export function AppShell({
               activePageId={activePageId}
               liveTitle={liveTitle}
               activeDirectory={dir}
+              activeSpace={activeSpace}
+              isHome={isHome}
               isTrash={isTrash}
+              isBrowse={isBrowse}
             />
 
             <main
@@ -246,7 +262,12 @@ export function AppShell({
           onOpenChange={setPaletteOpen}
           recentPages={recentPagesWithTitles}
         />
-        <CreatePageDialog open={createOpen} onOpenChange={setCreateOpen} pages={livePages} />
+        <CreatePageDialog
+          open={createOpen}
+          onOpenChange={setCreateOpen}
+          pages={livePages}
+          initialDirectory={createInitialDirectory}
+        />
       </Sidebar.Provider>
     </LinkProvider>
   );
@@ -260,7 +281,10 @@ type AppSidebarProps = {
   activePageId?: string;
   liveTitle?: string;
   activeDirectory?: string;
+  activeSpace: string;
+  isHome: boolean;
   isTrash: boolean;
+  isBrowse: boolean;
 };
 
 function AppSidebar({
@@ -269,9 +293,13 @@ function AppSidebar({
   activePageId,
   liveTitle,
   activeDirectory,
+  activeSpace,
+  isHome,
   isTrash,
+  isBrowse,
 }: AppSidebarProps) {
   const { open, isMobile } = useSidebar();
+  const rootPages = useMemo(() => listRootPages(pages), [pages]);
 
   return (
     <Sidebar
@@ -285,6 +313,19 @@ function AppSidebar({
       </Sidebar.Header>
 
       <Sidebar.Content>
+        <Sidebar.Group>
+          <Sidebar.Menu>
+            <Sidebar.MenuButton
+              href="/"
+              icon={HouseIcon}
+              active={isHome}
+              aria-current={isHome ? 'page' : undefined}
+            >
+              ホーム
+            </Sidebar.MenuButton>
+          </Sidebar.Menu>
+        </Sidebar.Group>
+
         {recentPages.length > 0 ? (
           <Sidebar.Group>
             <Sidebar.GroupLabel>最近見たページ</Sidebar.GroupLabel>
@@ -305,16 +346,46 @@ function AppSidebar({
           </Sidebar.Group>
         ) : null}
 
+        <SpaceNav
+          pages={pages}
+          activeSpace={activeSpace}
+          activePageId={activePageId}
+          activeTitle={liveTitle}
+          activeDirectory={activeDirectory}
+          isMobile={isMobile}
+        />
+
+        {rootPages.length > 0 ? (
+          <Sidebar.Group>
+            <Sidebar.GroupLabel>ルートページ</Sidebar.GroupLabel>
+            <Sidebar.Menu>
+              {rootPages.map((page) => (
+                <Sidebar.MenuButton
+                  href={`/pages/${page.id}`}
+                  size="sm"
+                  icon={FileTextIcon}
+                  active={page.id === activePageId}
+                  aria-current={page.id === activePageId ? 'page' : undefined}
+                  key={page.id}
+                >
+                  {page.name}
+                </Sidebar.MenuButton>
+              ))}
+            </Sidebar.Menu>
+          </Sidebar.Group>
+        ) : null}
+
         <Sidebar.Group>
-          <Sidebar.GroupLabel>すべてのページ</Sidebar.GroupLabel>
-          <div className="px-1.5">
-            <PageTree
-              pages={pages}
-              activePageId={activePageId}
-              activeTitle={liveTitle}
-              activeDirectory={activeDirectory}
-            />
-          </div>
+          <Sidebar.Menu>
+            <Sidebar.MenuButton
+              href="/browse"
+              icon={TreeStructureIcon}
+              active={isBrowse}
+              aria-current={isBrowse ? 'page' : undefined}
+            >
+              すべてのページ
+            </Sidebar.MenuButton>
+          </Sidebar.Menu>
         </Sidebar.Group>
 
         {pages.length === 0 ? (
