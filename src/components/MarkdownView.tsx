@@ -15,7 +15,7 @@ import remarkGfm from 'remark-gfm';
 import rehypeSanitize, { defaultSchema } from 'rehype-sanitize';
 import rehypeHighlight from 'rehype-highlight';
 import { Badge, Button, Text } from '@cloudflare/kumo';
-import { CheckIcon, CopyIcon } from '@phosphor-icons/react';
+import { CheckIcon, CopyIcon, ListBulletsIcon, XIcon } from '@phosphor-icons/react';
 import { createPageByPath } from '../client/pagePathApi';
 import type { Backlink } from '../server/backlinks';
 import type { PageNavigation } from '../server/types';
@@ -50,6 +50,8 @@ const sanitizeSchema = {
   },
 };
 
+const SIDE_PANEL_STORAGE_KEY = 'zeee.read-side-panel.v1';
+
 export function MarkdownView({
   markdown,
   pages,
@@ -60,6 +62,7 @@ export function MarkdownView({
 }: Props) {
   const articleRef = useRef<HTMLElement>(null);
   const [toc, setToc] = useState<TocItem[]>([]);
+  const [sidePanelOpen, setSidePanelOpen] = useState(true);
   const [backlinks, setBacklinks] = useState<Backlink[] | null>(null);
   const [backlinksError, setBacklinksError] = useState(false);
   const [backlinksRetry, setBacklinksRetry] = useState(0);
@@ -68,6 +71,30 @@ export function MarkdownView({
     [linkTargets, pages],
   );
   const resolve = useMemo(() => createWikiResolver(targets), [targets]);
+  const sidePanelRestoredRef = useRef(false);
+  const lastSidePanelOpenRef = useRef(sidePanelOpen);
+
+  useEffect(() => {
+    if (sidePanelRestoredRef.current) return;
+    sidePanelRestoredRef.current = true;
+    try {
+      const stored = window.localStorage.getItem(SIDE_PANEL_STORAGE_KEY);
+      if (stored !== 'open' && stored !== 'closed') return;
+      setSidePanelOpen(stored === 'open');
+    } catch {
+      return;
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!sidePanelRestoredRef.current || sidePanelOpen === lastSidePanelOpenRef.current) return;
+    lastSidePanelOpenRef.current = sidePanelOpen;
+    try {
+      window.localStorage.setItem(SIDE_PANEL_STORAGE_KEY, sidePanelOpen ? 'open' : 'closed');
+    } catch {
+      return;
+    }
+  }, [sidePanelOpen]);
 
   useEffect(() => {
     const root = articleRef.current;
@@ -175,7 +202,15 @@ export function MarkdownView({
   const hasHeadingMarkdown = useMemo(() => markdownHasHeadings(markdown), [markdown]);
   const showMobileToc = hasToc || hasHeadingMarkdown;
   const hasBacklinks = (backlinks?.length ?? 0) > 0;
-  const showSidePanel = sidePanel && (hasToc || hasBacklinks || backlinksError);
+  const hasSidePanelContent = hasToc || hasBacklinks || backlinksError;
+  const panelAvailable = sidePanel && hasSidePanelContent;
+  const showSidePanel = panelAvailable && sidePanelOpen;
+  const wideProse = panelAvailable && !sidePanelOpen;
+  const sidePanelLabel = hasToc
+    ? hasBacklinks || backlinksError
+      ? '目次とバックリンク'
+      : '目次'
+    : 'バックリンク';
 
   return (
     <div className="min-h-[60svh] px-5 py-7 sm:px-8 sm:py-9 lg:min-h-[calc(100vh-18rem)]">
@@ -186,7 +221,25 @@ export function MarkdownView({
             : undefined
         }
       >
-        <div className="min-w-0">
+        <div className={wideProse ? 'min-w-0 max-w-[52rem]' : 'min-w-0'}>
+          {panelAvailable ? (
+            <div className="mb-3 hidden justify-end xl:flex">
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                icon={sidePanelOpen ? <XIcon size={14} /> : <ListBulletsIcon size={14} />}
+                aria-expanded={sidePanelOpen}
+                aria-controls="page-side-panel"
+                title={`${sidePanelLabel}を${sidePanelOpen ? '閉じる' : '開く'}`}
+                onClick={() => setSidePanelOpen((open) => !open)}
+                className="h-8"
+              >
+                {sidePanelLabel}を{sidePanelOpen ? '閉じる' : '開く'}
+              </Button>
+            </div>
+          ) : null}
+
           {showMobileToc ? (
             <details className="mb-5 border-b border-kumo-line pb-3 xl:hidden">
               <summary className="cursor-pointer py-2 text-sm font-medium text-kumo-strong">
@@ -196,7 +249,10 @@ export function MarkdownView({
             </details>
           ) : null}
 
-          <article className="zeee-prose" ref={articleRef}>
+          <article
+            className={wideProse ? 'zeee-prose zeee-prose-wide' : 'zeee-prose'}
+            ref={articleRef}
+          >
             <ReactMarkdown
               remarkPlugins={[remarkGfm, [remarkWikiLinks, { resolve }]]}
               rehypePlugins={[
@@ -241,7 +297,7 @@ export function MarkdownView({
         </div>
 
         {showSidePanel ? (
-          <aside className="hidden self-start xl:sticky xl:top-20 xl:block">
+          <aside id="page-side-panel" className="hidden self-start xl:sticky xl:top-20 xl:block">
             {hasToc ? (
               <section aria-label="目次" className="mb-6">
                 <h2 className="mb-2 text-sm font-semibold text-kumo-subtle">目次</h2>
