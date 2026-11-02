@@ -1,19 +1,28 @@
-import { useEffect, useId, useRef, useState } from 'react';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useRouter } from '@void/react';
-import { Input, LayerDialog, Text } from '@cloudflare/kumo';
+import { LayerDialog, Text } from '@cloudflare/kumo';
+import { createPageByPath } from '../client/pagePathApi';
+import { validatePagePath, type PagePathPage } from '../shared/pagePath';
+import { PagePathInput } from './PagePathInput';
 
 type Props = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  pages: PagePathPage[];
 };
 
-export function CreatePageDialog({ open, onOpenChange }: Props) {
+export function CreatePageDialog({ open, onOpenChange, pages }: Props) {
   const router = useRouter();
   const formId = useId();
+  const errorId = useId();
   const inputRef = useRef<HTMLInputElement>(null);
   const [title, setTitle] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const validation = useMemo(
+    () => (title.trim() ? validatePagePath(title, pages) : null),
+    [title, pages],
+  );
 
   useEffect(() => {
     if (!open) return;
@@ -25,27 +34,25 @@ export function CreatePageDialog({ open, onOpenChange }: Props) {
   }, [open]);
 
   async function createPage() {
-    const trimmed = title.trim();
-    if (!trimmed || busy) return;
+    if (busy) return;
+    const result = validatePagePath(title, pages);
+    if (!result.ok) {
+      setError(result.message);
+      return;
+    }
     setBusy(true);
     setError('');
-    try {
-      const response = await fetch('/api/pages', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json', accept: 'application/json' },
-        body: JSON.stringify({ title: trimmed }),
-      });
-      if (!response.ok) throw new Error(`create failed: ${response.status}`);
-      const data = (await response.json()) as { page?: { id?: unknown } };
-      const pageId = data.page?.id;
-      if (typeof pageId !== 'string' || !pageId) throw new Error('invalid response');
-      onOpenChange(false);
-      void router.visit(`/pages/${pageId}`);
-    } catch {
-      setError('ページを作成できませんでした。もう一度お試しください。');
+    const created = await createPageByPath(result.path);
+    if (!created.ok) {
+      setError(created.message);
       setBusy(false);
+      return;
     }
+    onOpenChange(false);
+    void router.visit(`/pages/${created.id}`);
   }
+
+  const visibleError = error || (validation && !validation.ok ? validation.message : '');
 
   return (
     <LayerDialog.Root
@@ -57,7 +64,9 @@ export function CreatePageDialog({ open, onOpenChange }: Props) {
     >
       <LayerDialog.Content size="sm" verticalAlign="center" closeLabel="閉じる">
         <LayerDialog.Title>新規ページ</LayerDialog.Title>
-        <LayerDialog.Description>ページタイトルを入力してください。</LayerDialog.Description>
+        <LayerDialog.Description>
+          ページのパスを入力してください。「/」でディレクトリを区切ります。
+        </LayerDialog.Description>
         <LayerDialog.Body>
           <form
             id={formId}
@@ -67,21 +76,24 @@ export function CreatePageDialog({ open, onOpenChange }: Props) {
               void createPage();
             }}
           >
-            <Input
+            <PagePathInput
               ref={inputRef}
               value={title}
-              onChange={(event) => {
-                setTitle(event.target.value);
+              onChange={(value) => {
+                setTitle(value);
                 if (error) setError('');
               }}
-              placeholder="ページタイトル"
-              aria-label="ページタイトル"
+              pages={pages}
+              placeholder="例: プロジェクト/設計"
+              ariaLabel="新しいページのパス"
               required
               maxLength={200}
+              invalid={Boolean(visibleError)}
+              errorId={visibleError ? errorId : undefined}
             />
-            {error ? (
-              <Text variant="error" size="sm">
-                {error}
+            {visibleError ? (
+              <Text id={errorId} variant="error" size="sm" role="alert">
+                {visibleError}
               </Text>
             ) : null}
           </form>
@@ -91,7 +103,7 @@ export function CreatePageDialog({ open, onOpenChange }: Props) {
             type="submit"
             form={formId}
             loading={busy}
-            disabled={!title.trim() || busy}
+            disabled={!title.trim() || busy || (validation !== null && !validation.ok)}
           >
             作成
           </LayerDialog.Action>

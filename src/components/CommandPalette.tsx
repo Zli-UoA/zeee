@@ -18,6 +18,7 @@ import {
   WarningCircleIcon,
 } from '@phosphor-icons/react';
 import { splitHighlight } from '../client/highlight';
+import { PagePathContext } from './PagePathBreadcrumb';
 import {
   buildPaletteActions,
   normalizeSearchResults,
@@ -258,6 +259,7 @@ export function CommandPalette({ open, onOpenChange, recentPages }: Props) {
             <span className="block truncate text-sm font-medium text-kumo-strong">
               {highlightedParts(result.title, trimmedQuery)}
             </span>
+            <PagePathContext title={result.title} />
             {result.excerpt ? (
               <span className="line-clamp-2 text-sm text-kumo-subtle">
                 {highlightedParts(result.excerpt, trimmedQuery)}

@@ -9,6 +9,7 @@ import {
 } from '../src/server/db';
 import { jsonError, redirectTo, sameOrigin } from '../src/server/http';
 import { readRecentPages } from '../src/server/recent';
+import { normalizeDirectoryPath } from '../src/shared/pagePath';
 import type { RecentPage } from '../src/shared/recent';
 import { PaginationError, parsePagination, parsePageSort } from '../src/server/pagination';
 import type {
@@ -29,6 +30,7 @@ export type Props = {
   limit: number;
   recentPages: RecentPage[];
   query: string;
+  dir: string;
   sort: PageSort;
   results: SearchResult[];
   now: number;
@@ -36,10 +38,12 @@ export type Props = {
 };
 
 export const head = defineHead<Props>((_c, props) => ({
-  title: props.query ? '検索結果' : 'ページ',
+  title: props.query ? '検索結果' : props.dir || 'ページ',
 }));
 
 export const loader = defineHandler(async (c): Promise<Props | Response> => {
+  const url = new URL(c.req.url);
+  const dir = normalizeDirectoryPath(url.searchParams.get('dir'));
   const user = await getSessionUser(c);
   if (!user) {
     return {
@@ -51,6 +55,7 @@ export const loader = defineHandler(async (c): Promise<Props | Response> => {
       sidebarPages: [],
       recentPages: [],
       query: '',
+      dir,
       sort: 'updated',
       results: [],
       now: Date.now(),
@@ -59,7 +64,6 @@ export const loader = defineHandler(async (c): Promise<Props | Response> => {
   }
 
   const env = c.env as Env;
-  const url = new URL(c.req.url);
   const query = (url.searchParams.get('q') ?? '').trim();
   try {
     const sort = parsePageSort(url.searchParams.get('sort'));
@@ -74,6 +78,7 @@ export const loader = defineHandler(async (c): Promise<Props | Response> => {
       sidebarPages,
       recentPages: readRecentPages(c, sidebarPages, user.id),
       query,
+      dir,
       sort,
       results: query ? (slice.items as SearchResult[]) : [],
       nextCursor: slice.nextCursor,

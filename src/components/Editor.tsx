@@ -2,16 +2,7 @@ import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import type * as Y from 'yjs';
 import type { Awareness } from 'y-protocols/awareness';
 import { useRouter } from '@void/react';
-import {
-  Badge,
-  Button,
-  DropdownMenu,
-  Empty,
-  Input,
-  LayerCard,
-  LayerDialog,
-  Text,
-} from '@cloudflare/kumo';
+import { Badge, Button, DropdownMenu, Empty, LayerCard, LayerDialog, Text } from '@cloudflare/kumo';
 import {
   ArrowClockwiseIcon,
   ArrowCounterClockwiseIcon,
@@ -26,7 +17,10 @@ import {
 import type { ZeeeProvider, Collaborator, ConnectionStatus, SaveStatus } from '../client/provider';
 import type { PageRecord, PageNavigation, RevisionRecord, SessionUser } from '../server/types';
 import type { LinkTarget } from '../markdown/wiki';
+import { updatePageTitleByPath } from '../client/pagePathApi';
 import { formatDate } from '../shared/format';
+import { pagePathName, validatePagePath } from '../shared/pagePath';
+import { PagePathInput } from './PagePathInput';
 import { RevisionPreview } from './RevisionPreview';
 
 const CodeEditor = lazy(() => import('./CodeEditor'));
@@ -80,6 +74,11 @@ export function Editor({ page, user, revisions, pages, linkTargets }: Props) {
     () => linkTargets ?? pages.map((item) => ({ ...item, aliases: [] as string[] })),
     [linkTargets, pages],
   );
+  const titleValidation = useMemo(
+    () => (title.trim() ? validatePagePath(title, pages, { excludeId: page.id }) : null),
+    [title, pages, page.id],
+  );
+  const titleName = pagePathName(title);
 
   useEffect(() => {
     let cancelled = false;
@@ -241,39 +240,36 @@ export function Editor({ page, user, revisions, pages, linkTargets }: Props) {
   }
 
   async function saveTitle() {
-    const next = title.trim();
-    if (!next) {
+    if (!title.trim()) {
       setTitle(savedTitle);
       return;
     }
+    const validation = validatePagePath(title, pages, { excludeId: page.id });
+    if (!validation.ok) {
+      setError(validation.message);
+      return;
+    }
+    const next = validation.path;
     if (next === savedTitle) {
       setTitle(next);
+      setError('');
       return;
     }
 
     setError('');
     const seq = titleSaveSeqRef.current + 1;
     titleSaveSeqRef.current = seq;
-    try {
-      const response = await fetch(`/api/pages/${page.id}`, {
-        method: 'PATCH',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ title: next }),
-        keepalive: true,
-      });
-      if (seq !== titleSaveSeqRef.current) return;
-      if (!response.ok) {
-        setError('タイトルを保存できませんでした');
-        return;
-      }
-      setTitle((current) => (current.trim() === next ? next : current));
-      setSavedTitle(next);
-      window.dispatchEvent(
-        new CustomEvent('zeee:page-renamed', { detail: { id: page.id, title: next } }),
-      );
-    } catch {
-      if (seq === titleSaveSeqRef.current) setError('タイトルを保存できませんでした');
+    const result = await updatePageTitleByPath(page.id, next);
+    if (seq !== titleSaveSeqRef.current) return;
+    if (!result.ok) {
+      setError(result.message);
+      return;
     }
+    setTitle((current) => (current.trim() === next ? next : current));
+    setSavedTitle(next);
+    window.dispatchEvent(
+      new CustomEvent('zeee:page-renamed', { detail: { id: page.id, title: next } }),
+    );
   }
 
   async function saveRevision() {
@@ -349,20 +345,22 @@ export function Editor({ page, user, revisions, pages, linkTargets }: Props) {
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
           <div className="min-w-0 sm:flex-1">
             {mode === 'edit' ? (
-              <Input
+              <PagePathInput
                 value={title}
-                onChange={(event) => setTitle(event.target.value)}
-                onBlur={() => void saveTitle()}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter') {
-                    event.preventDefault();
-                    event.currentTarget.blur();
-                  }
+                onChange={(value) => {
+                  setTitle(value);
+                  if (error) setError('');
                 }}
-                aria-label="タイトル"
-                enterKeyHint="done"
+                pages={pages}
+                ariaLabel="タイトル（パス）"
+                placeholder="例: プロジェクト/設計"
+                required
+                maxLength={200}
                 size="lg"
-                className="w-full border-0 bg-transparent px-0 py-0 text-2xl font-semibold shadow-none ring-0 focus:ring-2 focus:ring-kumo-focus/40"
+                className="w-full"
+                invalid={titleValidation !== null && !titleValidation.ok}
+                onBlur={() => void saveTitle()}
+                onEnter={() => void saveTitle()}
               />
             ) : (
               <div className="flex h-10 items-center">
@@ -370,7 +368,7 @@ export function Editor({ page, user, revisions, pages, linkTargets }: Props) {
                   className="w-full truncate text-2xl font-semibold text-kumo-strong"
                   title={title}
                 >
-                  {title || '無題'}
+                  {titleName || '無題'}
                 </h1>
               </div>
             )}
