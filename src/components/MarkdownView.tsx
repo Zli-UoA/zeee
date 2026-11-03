@@ -130,12 +130,14 @@ export function MarkdownView({
   const components = useMemo<Components>(
     () => ({
       img({ src, alt }) {
-        const custom = emojis.some((e) => e.image_url === src);
+        const custom = emojis.find((e) => e.image_url === src);
         return (
           <img
             src={src}
             alt={alt ?? ''}
             loading="lazy"
+            width={custom?.width ?? undefined}
+            height={custom?.height ?? undefined}
             className={custom ? 'zeee-custom-emoji' : undefined}
           />
         );

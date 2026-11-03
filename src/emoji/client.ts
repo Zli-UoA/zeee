@@ -4,6 +4,8 @@ export type CustomEmoji = {
   aliases: string[];
   category: string;
   image_url: string;
+  width?: number | null;
+  height?: number | null;
   updated_at: string;
   version: number;
 };
