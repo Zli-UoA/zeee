@@ -18,6 +18,7 @@ export default function TrashPage({
   pages,
   recentPages,
   deletedPages: initialDeletedPages,
+  totalDeletedPages: initialTotalDeletedPages,
   loginUrl,
   nextCursor,
   cursor,
@@ -25,6 +26,7 @@ export default function TrashPage({
 }: Props) {
   const router = useRouter();
   const [deletedPages, setDeletedPages] = useState(initialDeletedPages);
+  const [totalDeletedPages, setTotalDeletedPages] = useState(initialTotalDeletedPages);
   const [pending, setPending] = useState<Pending>(null);
   const [confirming, setConfirming] = useState<DeletedPageSummary | null>(null);
   const [shownConfirming, setShownConfirming] = useState<DeletedPageSummary | null>(null);
@@ -35,7 +37,8 @@ export default function TrashPage({
 
   useEffect(() => {
     setDeletedPages(initialDeletedPages);
-  }, [initialDeletedPages]);
+    setTotalDeletedPages(initialTotalDeletedPages);
+  }, [initialDeletedPages, initialTotalDeletedPages]);
 
   useEffect(() => {
     if (confirming) setShownConfirming(confirming);
@@ -63,6 +66,7 @@ export default function TrashPage({
         return;
       }
       setDeletedPages((current) => current.filter((item) => item.id !== page.id));
+      setTotalDeletedPages((current) => Math.max(0, current - 1));
       void router.visit(`/pages/${page.id}`);
     } catch {
       setError('復元できませんでした。接続を確認して再試行してください。');
@@ -92,6 +96,7 @@ export default function TrashPage({
         return;
       }
       setDeletedPages((current) => current.filter((item) => item.id !== page.id));
+      setTotalDeletedPages((current) => Math.max(0, current - 1));
       setConfirming(null);
       setNotice({ kind: 'purged', title: page.title });
     } catch {
@@ -122,8 +127,8 @@ export default function TrashPage({
               ゴミ箱
             </Text>
             <Text variant="secondary" size="sm">
-              {deletedPages.length > 0
-                ? `削除済みのページ ${deletedPages.length}件。復元するか、完全に削除できます。`
+              {totalDeletedPages > 0
+                ? `削除済みのページ ${totalDeletedPages}件。復元するか、完全に削除できます。`
                 : '削除したページはここから復元できます。完全に削除するまで本文と履歴は残ります。'}
             </Text>
           </div>

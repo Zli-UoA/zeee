@@ -64,7 +64,7 @@ export default function AllPages({
       pages={sidebarPages}
       initialRecentPages={recentPages}
       query={query}
-      queryResultCount={query ? results.length : undefined}
+      queryResultCount={query ? totalResults : undefined}
       dir={dir}
     >
       {!user ? (

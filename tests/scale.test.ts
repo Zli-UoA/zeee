@@ -129,7 +129,9 @@ describe('keyset page lists', () => {
     expect((await listPages(db, { limit: 2 })).nextCursor).toBeNull();
     for (const p of (await listPages(db)).items) await softDeletePage(db, p.id);
     expect((await listPages(db)).items).toEqual([]);
-    expect((await listDeletedPages(db, { limit: 1 })).nextCursor).not.toBeNull();
+    const deleted = await listDeletedPages(db, { limit: 1 });
+    expect(deleted.total).toBe(2);
+    expect(deleted.nextCursor).not.toBeNull();
   });
 
   it('keeps the sidebar and all link candidates beyond the first page', async () => {

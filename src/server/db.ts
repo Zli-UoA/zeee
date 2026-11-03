@@ -375,6 +375,10 @@ export async function listDeletedPages(
   const limit = pageSize(options);
   const cursor = readCursor(options.cursor, ['trash']);
   await ensureSchema(db);
+  const totalRow = await db
+    .prepare('SELECT COUNT(*) AS count FROM page WHERE deleted_at IS NOT NULL')
+    .first<{ count: number }>();
+  const total = Number(totalRow?.count ?? 0);
   const after = cursor
     ? 'AND p.deleted_at <= ? AND (p.deleted_at < ? OR (p.deleted_at = ? AND p.id > ?))'
     : '';
@@ -392,7 +396,7 @@ export async function listDeletedPages(
     query: '',
     keys: [row.deleted_at, row.id],
   }));
-  return { ...slice, items: slice.items.map(toDeletedPageSummary) };
+  return { ...slice, items: slice.items.map(toDeletedPageSummary), total };
 }
 
 export function sortPageSummaries(pages: PageSummary[], sort: PageSort): PageSummary[] {

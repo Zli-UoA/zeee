@@ -12,6 +12,7 @@ export type Props = {
   pages: PageNavigation[];
   recentPages: RecentPage[];
   deletedPages: DeletedPageSummary[];
+  totalDeletedPages: number;
   nextCursor: string | null;
   cursor: string | null;
   limit: number;
@@ -28,6 +29,7 @@ export const loader = defineHandler(async (c): Promise<Props | Response> => {
       pages: [],
       recentPages: [],
       deletedPages: [],
+      totalDeletedPages: 0,
       nextCursor: null,
       cursor: null,
       limit: 50,
@@ -47,6 +49,7 @@ export const loader = defineHandler(async (c): Promise<Props | Response> => {
       pages,
       recentPages: readRecentPages(c, pages, user.id),
       deletedPages: slice.items,
+      totalDeletedPages: slice.total ?? slice.items.length,
       nextCursor: slice.nextCursor,
       cursor: options.cursor ?? null,
       limit: slice.limit,
