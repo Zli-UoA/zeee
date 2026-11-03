@@ -102,3 +102,4 @@ Cloudflare → Traefik → celld (Worker + PageRoom Durable Object)
 - 本文は Yjs の `Y.Text`。メタデータ、revision、検索は D1
 - 1 ページ = 1 Durable Object。Worker 名と DO クラス名は固定
 - 設計判断と制約は [docs/spike.md](docs/spike.md)
+- 情報設計のアウトプットは [docs/ia/README.md](docs/ia/README.md)
