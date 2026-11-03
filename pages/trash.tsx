@@ -156,7 +156,7 @@ export default function TrashPage({
               description="ページを削除すると、ここに表示されます。"
               contents={
                 <LinkButton href="/" variant="secondary">
-                  ページ一覧へ戻る
+                  すべてのページへ戻る
                 </LinkButton>
               }
             />

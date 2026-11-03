@@ -37,7 +37,6 @@ type Props = {
 
 const SIDEBAR_OPEN_STORAGE_KEY = 'zeee.sidebar-open.v1';
 const SIDEBAR_DESKTOP_QUERY = '(min-width: 1280px)';
-const SIDEBAR_MOBILE_QUERY = '(max-width: 767px)';
 
 export function AppShell({
   user,
@@ -102,16 +101,11 @@ export function AppShell({
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    if (window.matchMedia(SIDEBAR_MOBILE_QUERY).matches) {
+    if (!window.matchMedia(SIDEBAR_DESKTOP_QUERY).matches) {
       setSidebarOpen(false);
       return;
     }
-    const stored = readSidebarPreference();
-    if (stored !== null) {
-      setSidebarOpen(stored);
-      return;
-    }
-    setSidebarOpen(window.matchMedia(SIDEBAR_DESKTOP_QUERY).matches);
+    setSidebarOpen(readSidebarPreference() ?? true);
   }, []);
 
   useEffect(() => {
@@ -162,7 +156,7 @@ export function AppShell({
   function handleSidebarOpenChange(next: boolean) {
     setSidebarOpen(next);
     if (typeof window === 'undefined') return;
-    if (window.matchMedia(SIDEBAR_MOBILE_QUERY).matches) return;
+    if (!window.matchMedia(SIDEBAR_DESKTOP_QUERY).matches) return;
     try {
       window.localStorage.setItem(SIDEBAR_OPEN_STORAGE_KEY, next ? 'open' : 'closed');
     } catch {
@@ -333,7 +327,7 @@ function AppSidebar({
     >
       <Sidebar.Header className="h-14 justify-between px-3 md:hidden">
         <Brand />
-        <Sidebar.Close className="size-8" aria-label="ページ一覧を閉じる" />
+        <Sidebar.Close className="size-8" aria-label="サイドバーを閉じる" />
       </Sidebar.Header>
 
       <Sidebar.Content>
@@ -450,9 +444,9 @@ function DesktopSidebarToggle() {
 
   return (
     <Sidebar.Trigger
-      aria-label={open ? 'ページ一覧を閉じる' : 'ページ一覧を開く'}
+      aria-label={open ? 'サイドバーを閉じる' : 'サイドバーを開く'}
       aria-controls="pages-nav"
-      title={open ? 'ページ一覧を閉じる' : 'ページ一覧を開く'}
+      title={open ? 'サイドバーを閉じる' : 'サイドバーを開く'}
       className="hidden md:flex"
     />
   );
@@ -466,7 +460,7 @@ function MobileNavButton() {
       type="button"
       variant="ghost"
       shape="square"
-      aria-label="ページ一覧を開く"
+      aria-label="サイドバーを開く"
       aria-controls="pages-nav"
       aria-expanded={openMobile}
       onClick={() => setOpenMobile(true)}

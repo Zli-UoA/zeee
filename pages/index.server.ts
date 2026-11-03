@@ -34,6 +34,7 @@ export type Props = {
   dir: string;
   sort: PageSort;
   results: SearchResult[];
+  totalResults: number;
   now: number;
   loginUrl: string;
 };
@@ -60,6 +61,7 @@ export const loader = defineHandler(async (c): Promise<Props | Response> => {
       dir,
       sort: 'updated',
       results: [],
+      totalResults: 0,
       now: Date.now(),
       loginUrl: loginPath(c, '/'),
     };
@@ -82,6 +84,7 @@ export const loader = defineHandler(async (c): Promise<Props | Response> => {
       dir,
       sort,
       results: query ? (slice.items as SearchResult[]) : [],
+      totalResults: query ? (slice.total ?? slice.items.length) : 0,
       nextCursor: slice.nextCursor,
       cursor: options.cursor ?? null,
       limit: slice.limit,

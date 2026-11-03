@@ -40,6 +40,7 @@ type SearchResponse = {
   query?: unknown;
   results?: unknown;
   nextCursor?: unknown;
+  total?: unknown;
 };
 
 function highlightedParts(text: string, query: string) {
@@ -71,6 +72,7 @@ export function CommandPalette({ open, onOpenChange, recentPages }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [activeIndex, setActiveIndex] = useState(0);
   const [hasMore, setHasMore] = useState(false);
+  const [total, setTotal] = useState(0);
   const [retryToken, setRetryToken] = useState(0);
 
   const trimmedQuery = query.trim();
@@ -84,6 +86,7 @@ export function CommandPalette({ open, onOpenChange, recentPages }: Props) {
     setError(null);
     setActiveIndex(0);
     setHasMore(false);
+    setTotal(0);
   }, [open]);
 
   useEffect(() => {
@@ -100,6 +103,7 @@ export function CommandPalette({ open, onOpenChange, recentPages }: Props) {
       setLoading(false);
       setError(null);
       setHasMore(false);
+      setTotal(0);
       return;
     }
 
@@ -109,6 +113,7 @@ export function CommandPalette({ open, onOpenChange, recentPages }: Props) {
     setResults([]);
     setResultsQuery(null);
     setHasMore(false);
+    setTotal(0);
 
     const timer = window.setTimeout(() => {
       void (async () => {
@@ -126,12 +131,20 @@ export function CommandPalette({ open, onOpenChange, recentPages }: Props) {
           setResults(normalizeSearchResults(data.results));
           setResultsQuery(trimmedQuery);
           setHasMore(typeof data.nextCursor === 'string' && data.nextCursor.length > 0);
+          setTotal(
+            typeof data.total === 'number' && Number.isFinite(data.total)
+              ? data.total
+              : Array.isArray(data.results)
+                ? data.results.length
+                : 0,
+          );
           setLoading(false);
         } catch {
           if (controller.signal.aborted) return;
           setResults([]);
           setResultsQuery(null);
           setHasMore(false);
+          setTotal(0);
           setError('検索できませんでした。通信状態を確認してもう一度お試しください。');
           setLoading(false);
         }
@@ -222,7 +235,7 @@ export function CommandPalette({ open, onOpenChange, recentPages }: Props) {
     : searchPending
       ? '検索中です'
       : trimmedQuery
-        ? `${results.length}件のページが見つかりました`
+        ? `${total}件のページが見つかりました`
         : recentPages.length > 0
           ? `最近見たページが${recentPages.length}件あります`
           : '';
@@ -257,7 +270,7 @@ export function CommandPalette({ open, onOpenChange, recentPages }: Props) {
   const resultsGroup = showResults ? (
     <div role="group" aria-label="検索結果">
       <div className="px-2 pt-2 pb-1 text-sm font-semibold text-kumo-subtle">
-        検索結果{hasMore ? `（上位${PALETTE_RESULT_LIMIT}件を表示）` : ''}
+        検索結果 {total}件{hasMore ? `（上位${PALETTE_RESULT_LIMIT}件を表示）` : ''}
       </div>
       {results.slice(0, PALETTE_RESULT_LIMIT).map((result, index) => (
         <PaletteOption

@@ -765,7 +765,7 @@ export async function searchPages(
   const trimmed = query.trim();
   if (trimmed.length > 500) throw new PaginationError('q must be at most 500 characters');
   const cursor = readCursor(options.cursor, ['fts', 'like'], trimmed);
-  if (!trimmed) return { items: [], nextCursor: null, limit };
+  if (!trimmed) return { items: [], nextCursor: null, limit, total: 0 };
   await ensureSchema(db);
   if (cursor?.kind === 'fts' || (!cursor && Array.from(trimmed).length >= 3)) {
     try {
@@ -774,6 +774,7 @@ export async function searchPages(
       const args = cursor
         ? [match, cursor.keys[0], cursor.keys[0], cursor.keys[1], limit + 1]
         : [match, limit + 1];
+      const total = await countSearchPages(db, trimmed, 'fts');
       const result = await db
         .prepare(`SELECT f.page_id AS id, f.title AS title,
         snippet(page_fts, 2, '', '', '…', 16) AS excerpt, rank,
@@ -789,7 +790,11 @@ export async function searchPages(
         query: trimmed,
         keys: [row.rank, row.id],
       }));
-      return { ...slice, items: slice.items.map(toSearchResult) };
+      return {
+        ...slice,
+        items: slice.items.map(toSearchResult),
+        total,
+      };
     } catch (error) {
       // Never change ranking midway through a cursor traversal.
       if (cursor) throw error;
@@ -803,6 +808,7 @@ export async function searchPages(
   const args = cursor
     ? [like, like, cursor.keys[0], cursor.keys[0], cursor.keys[0], cursor.keys[1], limit + 1]
     : [like, like, limit + 1];
+  const total = await countSearchPages(db, trimmed, 'like');
   const result = await db
     .prepare(`SELECT p.id, p.title,
     substr(COALESCE(b.markdown, ''), 1, ${EXCERPT_SOURCE_LENGTH}) AS excerpt,
@@ -818,7 +824,41 @@ export async function searchPages(
     query: trimmed,
     keys: [row.updated_at, row.id],
   }));
-  return { ...slice, items: slice.items.map(toSearchResult) };
+  return {
+    ...slice,
+    items: slice.items.map(toSearchResult),
+    total,
+  };
+}
+
+async function countSearchPages(
+  db: D1Database,
+  query: string,
+  kind: 'fts' | 'like',
+): Promise<number> {
+  if (kind === 'fts') {
+    const match = `"${query.replaceAll('"', '""')}"`;
+    const row = await db
+      .prepare(
+        `SELECT COUNT(*) AS count
+         FROM page_fts f JOIN page p ON p.id = f.page_id
+         WHERE page_fts MATCH ? AND p.deleted_at IS NULL`,
+      )
+      .bind(match)
+      .first<{ count: number }>();
+    return Number(row?.count ?? 0);
+  }
+
+  const like = `%${query}%`;
+  const row = await db
+    .prepare(
+      `SELECT COUNT(*) AS count
+       FROM page p LEFT JOIN page_body b ON b.page_id = p.id
+       WHERE p.deleted_at IS NULL AND (p.title LIKE ? OR b.markdown LIKE ?)`,
+    )
+    .bind(like, like)
+    .first<{ count: number }>();
+  return Number(row?.count ?? 0);
 }
 
 function toSearchResult(row: SearchRow): SearchResult {

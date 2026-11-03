@@ -49,6 +49,7 @@ export default function AllPages({
   dir,
   sort,
   results,
+  totalResults,
   cursor,
   nextCursor,
   limit,
@@ -80,7 +81,9 @@ export default function AllPages({
                 検索結果: 「{query}」
               </Text>
               <Text variant="secondary" size="sm">
-                {results.length}件{cursor || nextCursor ? 'を表示' : ''}
+                {cursor || nextCursor
+                  ? `全${totalResults}件中 ${results.length}件を表示`
+                  : `${totalResults}件`}
               </Text>
             </div>
           ) : dir ? null : (
@@ -90,7 +93,9 @@ export default function AllPages({
                   すべてのページ
                 </Text>
                 <Text variant="secondary" size="sm">
-                  {pages.length}ページ{cursor || nextCursor ? 'を表示' : ''}
+                  {cursor || nextCursor
+                    ? `全${sidebarPages.length}ページ中 ${pages.length}ページを表示`
+                    : `${sidebarPages.length}ページ`}
                 </Text>
               </div>
 

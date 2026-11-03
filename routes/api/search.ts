@@ -12,7 +12,13 @@ export const GET = defineHandler(async (c) => {
   const query = (params.get('q') ?? '').trim();
   try {
     const slice = await searchPages((c.env as Env).DB, query, parsePagination(params));
-    return { query, results: slice.items, nextCursor: slice.nextCursor, limit: slice.limit };
+    return {
+      query,
+      results: slice.items,
+      nextCursor: slice.nextCursor,
+      limit: slice.limit,
+      total: slice.total ?? slice.items.length,
+    };
   } catch (error) {
     if (error instanceof PaginationError) return jsonError(c, 400, error.message);
     throw error;

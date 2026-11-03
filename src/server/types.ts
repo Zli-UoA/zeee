@@ -31,6 +31,7 @@ export type PageSlice<T> = {
   items: T[];
   nextCursor: string | null;
   limit: number;
+  total?: number;
 };
 
 export type PaginationOptions = {
