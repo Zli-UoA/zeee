@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vite-plus/test';
 import { PathSuggestionListbox, PagePathInput } from '../src/components/PagePathInput';
 import { PagePathBreadcrumb } from '../src/components/PagePathBreadcrumb';
 import { PageTree } from '../src/components/PageTree';
+import { DirectoryScope } from '../src/components/DirectoryScope';
 import { directorySuggestions, type PagePathPage } from '../src/shared/pagePath';
 
 vi.mock('@void/react', async () => {
@@ -62,7 +63,38 @@ describe('PagePathBreadcrumb UI', () => {
     expect(html).toContain('href="/?dir=a"');
     expect(html).toContain('href="/?dir=a%2Fb"');
     expect(html).toContain('aria-current="page"');
+    expect(html).toContain('>すべてのページ</a>');
     expect(html).toContain('>c</span>');
+  });
+});
+
+describe('DirectoryScope UI', () => {
+  const pages = [
+    { id: 'p1', title: 'a/b/c', updatedAt: 100 },
+    { id: 'p2', title: 'a/b/d', updatedAt: 90 },
+    { id: 'p3', title: 'a/b/deep/e', updatedAt: 80 },
+    { id: 'p4', title: 'a/other', updatedAt: 70 },
+    { id: 'p5', title: 'z', updatedAt: 60 },
+  ];
+
+  it('renders the child directories and a flat full-path list instead of a tree', () => {
+    const html = renderToStaticMarkup(createElement(DirectoryScope, { pages, dir: 'a/b' }));
+
+    expect(html).toContain('子ディレクトリ');
+    expect(html).toContain('href="/?dir=a%2Fb%2Fdeep"');
+    expect(html).toContain('a/b/deep/');
+    expect(html).toContain('href="/pages/p1"');
+    expect(html).toContain('a/b/c');
+    expect(html).toContain('a/b/deep/e');
+    expect(html).not.toContain('href="/pages/p4"');
+    expect(html).not.toContain('role="tree"');
+  });
+
+  it('explains when the directory no longer exists', () => {
+    const html = renderToStaticMarkup(createElement(DirectoryScope, { pages, dir: 'missing' }));
+
+    expect(html).toContain('ディレクトリがない');
+    expect(html).toContain('すべてのページに戻る');
   });
 });
 

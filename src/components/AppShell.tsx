@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Link } from '@void/react';
-import { Button, LinkProvider, Sidebar, Text, useSidebar } from '@cloudflare/kumo';
+import { Button, DropdownMenu, LinkProvider, Sidebar, Text, useSidebar } from '@cloudflare/kumo';
 import {
   ClockCounterClockwiseIcon,
   ListIcon,
@@ -12,15 +12,15 @@ import {
 import { AppLink } from './AppLink';
 import { CommandPalette } from './CommandPalette';
 import { CreatePageDialog } from './CreatePageDialog';
-import { PagePathBreadcrumb } from './PagePathBreadcrumb';
 import { PageTree } from './PageTree';
 import { ZeeeLogo } from './ZeeeLogo';
 import { sidebarPageLists } from '../client/sidebarPages';
 import { useRecentPages, type RecentPage } from '../client/useRecentPages';
-import { pagePathName } from '../shared/pagePath';
+import { CREATE_PAGE_EVENT, type CreatePageEventDetail } from '../client/createPageEvents';
+import { pagePathSegments } from '../shared/pagePath';
 import type { PageNavigation, SessionUser } from '../server/types';
 
-type NavSection = 'trash';
+type NavSection = 'trash' | 'not-found';
 
 type Props = {
   user: SessionUser | null;
@@ -30,9 +30,14 @@ type Props = {
   activeTitle?: string;
   activeNav?: NavSection;
   query?: string;
+  queryResultCount?: number;
   dir?: string;
   children: ReactNode;
 };
+
+const SIDEBAR_OPEN_STORAGE_KEY = 'zeee.sidebar-open.v1';
+const SIDEBAR_DESKTOP_QUERY = '(min-width: 1280px)';
+const SIDEBAR_MOBILE_QUERY = '(max-width: 767px)';
 
 export function AppShell({
   user,
@@ -42,6 +47,7 @@ export function AppShell({
   activeTitle,
   activeNav,
   query,
+  queryResultCount,
   dir,
   children,
 }: Props) {
@@ -49,6 +55,8 @@ export function AppShell({
   const [liveTitle, setLiveTitle] = useState(activeTitle);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
+  const [createInitialValue, setCreateInitialValue] = useState('');
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const { recentPages, recordVisit } = useRecentPages(user?.id, initialRecentPages);
 
   const recentPagesWithTitles = useMemo(
@@ -66,6 +74,17 @@ export function AppShell({
   );
 
   const isTrash = activeNav === 'trash';
+  const isNotFound = activeNav === 'not-found';
+
+  const createContextPrefix = useMemo(() => {
+    if (query && queryResultCount === 0) return query;
+    if (dir) return `${dir}/`;
+    if (activeTitle) {
+      const parent = pagePathSegments(activeTitle).slice(0, -1).join('/');
+      return parent ? `${parent}/` : '';
+    }
+    return '';
+  }, [query, queryResultCount, dir, activeTitle]);
 
   useEffect(() => {
     setLivePages(pages);
@@ -82,6 +101,20 @@ export function AppShell({
   }, [user, activePageId, liveTitle, recordVisit]);
 
   useEffect(() => {
+    if (typeof window === 'undefined') return;
+    if (window.matchMedia(SIDEBAR_MOBILE_QUERY).matches) {
+      setSidebarOpen(false);
+      return;
+    }
+    const stored = readSidebarPreference();
+    if (stored !== null) {
+      setSidebarOpen(stored);
+      return;
+    }
+    setSidebarOpen(window.matchMedia(SIDEBAR_DESKTOP_QUERY).matches);
+  }, []);
+
+  useEffect(() => {
     if (!user || createOpen) return;
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.defaultPrevented || event.isComposing || event.key === 'Process') return;
@@ -93,10 +126,6 @@ export function AppShell({
     window.addEventListener('keydown', handleKeyDown, true);
     return () => window.removeEventListener('keydown', handleKeyDown, true);
   }, [user, createOpen]);
-
-  function openSearch() {
-    setPaletteOpen(true);
-  }
 
   useEffect(() => {
     const handleRename = (event: Event) => {
@@ -110,6 +139,36 @@ export function AppShell({
     window.addEventListener('zeee:page-renamed', handleRename);
     return () => window.removeEventListener('zeee:page-renamed', handleRename);
   }, [activePageId]);
+
+  useEffect(() => {
+    const handleCreate = (event: Event) => {
+      const detail = (event as CustomEvent<CreatePageEventDetail>).detail;
+      setCreateInitialValue(typeof detail?.initialValue === 'string' ? detail.initialValue : '');
+      setCreateOpen(true);
+    };
+    window.addEventListener(CREATE_PAGE_EVENT, handleCreate);
+    return () => window.removeEventListener(CREATE_PAGE_EVENT, handleCreate);
+  }, []);
+
+  function openSearch() {
+    setPaletteOpen(true);
+  }
+
+  function openCreate(initialValue: string) {
+    setCreateInitialValue(initialValue);
+    setCreateOpen(true);
+  }
+
+  function handleSidebarOpenChange(next: boolean) {
+    setSidebarOpen(next);
+    if (typeof window === 'undefined') return;
+    if (window.matchMedia(SIDEBAR_MOBILE_QUERY).matches) return;
+    try {
+      window.localStorage.setItem(SIDEBAR_OPEN_STORAGE_KEY, next ? 'open' : 'closed');
+    } catch {
+      return;
+    }
+  }
 
   if (!user) {
     return (
@@ -131,8 +190,13 @@ export function AppShell({
 
   return (
     <LinkProvider component={AppLink}>
-      <Sidebar.Provider collapsible="offcanvas" className="min-h-svh bg-kumo-canvas">
-        <SidebarPreference />
+      <Sidebar.Provider
+        collapsible="offcanvas"
+        className="min-h-svh bg-kumo-canvas"
+        open={sidebarOpen}
+        onOpenChange={handleSidebarOpenChange}
+        animationDuration={0}
+      >
         <CloseMobileSidebarOnNavigate
           activePageId={activePageId}
           activeNav={activeNav}
@@ -155,69 +219,39 @@ export function AppShell({
                 className="mx-1 hidden h-6 w-px shrink-0 bg-kumo-line sm:block"
               />
 
-              <div className="flex min-w-0 flex-1 items-center gap-2">
-                <div className="hidden min-w-0 sm:block md:hidden">
-                  <span className="block truncate text-sm font-medium text-kumo-strong">
-                    {liveTitle ? pagePathName(liveTitle) : 'Zeee'}
-                  </span>
-                </div>
+              <div className="hidden min-w-0 items-center lg:flex">
+                <button
+                  type="button"
+                  onClick={openSearch}
+                  className="flex h-9 w-64 items-center gap-2 rounded-lg bg-kumo-base px-3 text-left text-sm text-kumo-subtle ring ring-kumo-line hover:bg-kumo-tint focus-visible:ring-2 focus-visible:ring-kumo-brand focus-visible:outline-none"
+                  aria-label="ページを検索"
+                  aria-haspopup="dialog"
+                  aria-keyshortcuts="Meta+K Control+K"
+                  title="ページを検索（Ctrl+K）"
+                >
+                  <MagnifyingGlassIcon size={16} className="shrink-0" />
+                  <span className="min-w-0 flex-1 truncate">ページを検索</span>
+                  <kbd className="shrink-0 rounded border border-kumo-line px-1.5 py-0.5 text-[10px] text-kumo-subtle">
+                    Ctrl K
+                  </kbd>
+                </button>
+              </div>
 
-                {liveTitle ? (
-                  <PagePathBreadcrumb title={liveTitle} className="hidden min-w-0 md:flex" />
-                ) : null}
-
-                <div className="ml-auto flex shrink-0 items-center gap-2">
-                  <MobilePageActions onSearch={openSearch} />
-
-                  <button
-                    type="button"
-                    onClick={openSearch}
-                    className="hidden h-9 w-64 items-center gap-2 rounded-lg bg-kumo-base px-3 text-left text-sm text-kumo-subtle ring ring-kumo-line hover:bg-kumo-tint focus-visible:ring-2 focus-visible:ring-kumo-brand focus-visible:outline-none lg:flex"
-                    aria-label="ページを検索"
-                    aria-haspopup="dialog"
-                    aria-keyshortcuts="Meta+K Control+K"
-                    title="ページを検索（Ctrl+K）"
-                  >
-                    <MagnifyingGlassIcon size={16} className="shrink-0" />
-                    <span className="min-w-0 flex-1 truncate">{query || 'ページを検索'}</span>
-                    <kbd className="shrink-0 rounded border border-kumo-line px-1.5 py-0.5 text-[10px] text-kumo-subtle">
-                      Ctrl K
-                    </kbd>
-                  </button>
-
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    shape="square"
-                    aria-label="新しいページを作成"
-                    aria-haspopup="dialog"
-                    title="新しいページを作成"
-                    onClick={() => setCreateOpen(true)}
-                    className="size-11"
-                  >
-                    <PlusIcon size={18} />
-                  </Button>
-
-                  <span
-                    className="grid size-7 shrink-0 place-items-center rounded-full bg-kumo-tint text-[11px] font-semibold text-kumo-strong"
-                    aria-label={`ログイン中: ${user.displayName}`}
-                    title={user.displayName}
-                  >
-                    {user.displayName.slice(0, 1)}
-                  </span>
-                  <span className="hidden max-w-32 truncate text-sm text-kumo-subtle lg:inline">
-                    {user.displayName}
-                  </span>
-                  <a
-                    className="inline-flex size-11 items-center justify-center gap-1.5 rounded-md text-sm font-medium text-kumo-subtle no-underline hover:bg-kumo-tint hover:text-kumo-default lg:h-8 lg:w-auto lg:px-2"
-                    href="/auth/logout"
-                    aria-label="ログアウト"
-                    title="ログアウト"
-                  >
-                    <SignOutIcon size={15} />
-                    <span className="hidden lg:inline">ログアウト</span>
-                  </a>
-                </div>
+              <div className="ml-auto flex shrink-0 items-center gap-1.5">
+                <MobileSearchButton onSearch={openSearch} />
+                <Button
+                  type="button"
+                  variant="ghost"
+                  shape="square"
+                  aria-label="新規ページ"
+                  aria-haspopup="dialog"
+                  title="新規ページ"
+                  onClick={() => openCreate(createContextPrefix)}
+                  className="size-11"
+                >
+                  <PlusIcon size={18} />
+                </Button>
+                <AccountMenu user={user} />
               </div>
             </div>
           </header>
@@ -229,6 +263,7 @@ export function AppShell({
               activePageId={activePageId}
               liveTitle={liveTitle}
               activeDirectory={dir}
+              isAllPages={!activePageId && !isTrash && !isNotFound && !dir}
               isTrash={isTrash}
             />
 
@@ -244,15 +279,30 @@ export function AppShell({
         <CommandPalette
           open={paletteOpen}
           onOpenChange={setPaletteOpen}
-          recentPages={recentPagesWithTitles}
+          recentPages={sidebarRecentPages}
         />
-        <CreatePageDialog open={createOpen} onOpenChange={setCreateOpen} pages={livePages} />
+        <CreatePageDialog
+          open={createOpen}
+          onOpenChange={setCreateOpen}
+          pages={livePages}
+          initialValue={createInitialValue}
+        />
       </Sidebar.Provider>
     </LinkProvider>
   );
 }
 
-const SIDEBAR_OPEN_STORAGE_KEY = 'zeee.sidebar-open.v1';
+function readSidebarPreference(): boolean | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const stored = window.localStorage.getItem(SIDEBAR_OPEN_STORAGE_KEY);
+    if (stored === 'open') return true;
+    if (stored === 'closed') return false;
+  } catch {
+    return null;
+  }
+  return null;
+}
 
 type AppSidebarProps = {
   pages: PageNavigation[];
@@ -260,6 +310,7 @@ type AppSidebarProps = {
   activePageId?: string;
   liveTitle?: string;
   activeDirectory?: string;
+  isAllPages: boolean;
   isTrash: boolean;
 };
 
@@ -269,6 +320,7 @@ function AppSidebar({
   activePageId,
   liveTitle,
   activeDirectory,
+  isAllPages,
   isTrash,
 }: AppSidebarProps) {
   const { open, isMobile } = useSidebar();
@@ -306,7 +358,19 @@ function AppSidebar({
         ) : null}
 
         <Sidebar.Group>
-          <Sidebar.GroupLabel>すべてのページ</Sidebar.GroupLabel>
+          <Sidebar.GroupLabel>
+            <Link
+              href="/"
+              aria-current={isAllPages ? 'page' : undefined}
+              className={`inline-flex rounded-sm no-underline focus-visible:ring-2 focus-visible:ring-kumo-brand focus-visible:outline-none ${
+                isAllPages
+                  ? 'font-semibold text-kumo-strong'
+                  : 'text-kumo-subtle hover:text-kumo-default'
+              }`}
+            >
+              すべてのページ
+            </Link>
+          </Sidebar.GroupLabel>
           <div className="px-1.5">
             <PageTree
               pages={pages}
@@ -342,36 +406,6 @@ function AppSidebar({
   );
 }
 
-function SidebarPreference() {
-  const { open, setOpen, isMobile } = useSidebar();
-  const restoredRef = useRef(false);
-  const lastOpenRef = useRef(open);
-
-  useEffect(() => {
-    if (restoredRef.current) return;
-    restoredRef.current = true;
-    try {
-      const stored = window.localStorage.getItem(SIDEBAR_OPEN_STORAGE_KEY);
-      if (stored !== 'open' && stored !== 'closed') return;
-      setOpen(stored === 'open');
-    } catch {
-      return;
-    }
-  }, [setOpen]);
-
-  useEffect(() => {
-    if (isMobile || open === lastOpenRef.current) return;
-    lastOpenRef.current = open;
-    try {
-      window.localStorage.setItem(SIDEBAR_OPEN_STORAGE_KEY, open ? 'open' : 'closed');
-    } catch {
-      return;
-    }
-  }, [open, isMobile]);
-
-  return null;
-}
-
 function CloseMobileSidebarOnNavigate({
   activePageId,
   activeNav,
@@ -384,8 +418,16 @@ function CloseMobileSidebarOnNavigate({
   dir?: string;
 }) {
   const { setOpenMobile } = useSidebar();
+  const previousLocationRef = useRef<string | null>(null);
 
   useEffect(() => {
+    const location = `${activePageId ?? ''}|${activeNav ?? ''}|${query ?? ''}|${dir ?? ''}`;
+    if (previousLocationRef.current === null) {
+      previousLocationRef.current = location;
+      return;
+    }
+    if (previousLocationRef.current === location) return;
+    previousLocationRef.current = location;
     setOpenMobile(false);
   }, [activePageId, activeNav, query, dir, setOpenMobile]);
 
@@ -435,22 +477,55 @@ function MobileNavButton() {
   );
 }
 
-function MobilePageActions({ onSearch }: { onSearch: () => void }) {
+function MobileSearchButton({ onSearch }: { onSearch: () => void }) {
   return (
-    <div className="flex items-center gap-1 lg:hidden">
-      <Button
-        type="button"
-        variant="ghost"
-        shape="square"
-        aria-label="ページを検索"
-        aria-haspopup="dialog"
-        title="ページを検索"
-        onClick={onSearch}
-        className="size-11"
-      >
-        <MagnifyingGlassIcon size={18} />
-      </Button>
-    </div>
+    <Button
+      type="button"
+      variant="ghost"
+      shape="square"
+      aria-label="ページを検索"
+      aria-haspopup="dialog"
+      title="ページを検索"
+      onClick={onSearch}
+      className="size-11 lg:hidden"
+    >
+      <MagnifyingGlassIcon size={18} />
+    </Button>
+  );
+}
+
+function AccountMenu({ user }: { user: SessionUser }) {
+  const initial = user.displayName.trim().slice(0, 1) || '?';
+
+  return (
+    <DropdownMenu>
+      <DropdownMenu.Trigger
+        render={
+          <Button
+            type="button"
+            variant="ghost"
+            shape="square"
+            aria-label="アカウントメニュー"
+            title="アカウントメニュー"
+            className="size-11 rounded-full"
+          >
+            <span className="grid size-7 place-items-center rounded-full bg-kumo-tint text-[11px] font-semibold text-kumo-strong">
+              {initial}
+            </span>
+          </Button>
+        }
+      />
+      <DropdownMenu.Content align="end" className="min-w-56">
+        <div className="px-3 py-2">
+          <p className="truncate text-sm font-medium text-kumo-strong">{user.displayName}</p>
+          <p className="truncate text-sm text-kumo-subtle">@{user.username}</p>
+        </div>
+        <DropdownMenu.Separator />
+        <DropdownMenu.LinkItem href="/auth/logout" icon={<SignOutIcon size={16} />}>
+          ログアウト
+        </DropdownMenu.LinkItem>
+      </DropdownMenu.Content>
+    </DropdownMenu>
   );
 }
 
@@ -459,8 +534,8 @@ function Brand() {
     <Link
       className="flex shrink-0 items-center gap-2 text-kumo-strong no-underline"
       href="/"
-      aria-label="Zeee ホーム"
-      title="ホーム"
+      aria-label="Zeee（すべてのページ）"
+      title="すべてのページ"
     >
       <ZeeeLogo className="h-6 w-auto" />
     </Link>

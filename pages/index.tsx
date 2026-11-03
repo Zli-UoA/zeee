@@ -1,13 +1,12 @@
-import type { FormEvent } from 'react';
 import type { Props } from './index.server';
 import { Link, useRouter } from '@void/react';
-import { Button, Empty, Input, LayerCard, Select, Text } from '@cloudflare/kumo';
-import { FilesIcon, MagnifyingGlassIcon } from '@phosphor-icons/react';
+import { Button, Empty, LayerCard, Select, Text } from '@cloudflare/kumo';
+import { FilesIcon, MagnifyingGlassIcon, PlusIcon } from '@phosphor-icons/react';
 import { AppShell } from '../src/components/AppShell';
 import { DirectoryScope } from '../src/components/DirectoryScope';
 import { Gate } from '../src/components/Gate';
 import { PagePathContext } from '../src/components/PagePathBreadcrumb';
-import { PagePathCreateForm } from '../src/components/PagePathCreateForm';
+import { openCreatePageDialog } from '../src/client/createPageEvents';
 import { formatDate } from '../src/shared/format';
 import type { PageSort, PageSummary, SearchResult } from '../src/server/types';
 import { Pagination } from '../src/components/Pagination';
@@ -15,7 +14,7 @@ import { Pagination } from '../src/components/Pagination';
 const SORT_OPTIONS: { value: PageSort; label: string }[] = [
   { value: 'updated', label: '更新順' },
   { value: 'created', label: '作成順' },
-  { value: 'title', label: 'タイトル順' },
+  { value: 'title', label: '名前順' },
 ];
 
 const TIME_ZONE = 'Asia/Tokyo';
@@ -41,7 +40,7 @@ const GROUP_LABELS: { key: GroupKey; label: string }[] = [
   { key: 'older', label: 'それ以前' },
 ];
 
-export default function Home({
+export default function AllPages({
   user,
   pages,
   sidebarPages,
@@ -58,23 +57,13 @@ export default function Home({
 }: Props) {
   const router = useRouter();
 
-  function submitSearch(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const entry = new FormData(event.currentTarget).get('q');
-    const value = typeof entry === 'string' ? entry.trim() : '';
-    const params = new URLSearchParams();
-    if (value) params.set('q', value);
-    if (sort !== 'updated') params.set('sort', sort);
-    const search = params.toString();
-    void router.visit(search ? `/?${search}` : '/');
-  }
-
   return (
     <AppShell
       user={user}
       pages={sidebarPages}
       initialRecentPages={recentPages}
       query={query}
+      queryResultCount={query ? results.length : undefined}
       dir={dir}
     >
       {!user ? (
@@ -85,74 +74,54 @@ export default function Home({
         />
       ) : (
         <div className="flex flex-col gap-6">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-            <div className="flex min-w-0 flex-col gap-1">
+          {query ? (
+            <div className="flex flex-col gap-1">
               <Text variant="heading" size="lg" as="h1">
-                {query ? '検索結果' : dir ? 'ディレクトリ' : 'ページ'}
+                検索結果: 「{query}」
               </Text>
               <Text variant="secondary" size="sm">
-                {query
-                  ? `「${query}」に一致するページ ${results.length}件${cursor || nextCursor ? 'を表示' : ''}`
-                  : dir
-                    ? `「${dir}」の配下`
-                    : `${pages.length}ページ${cursor || nextCursor ? 'を表示' : ''}`}
+                {results.length}件{cursor || nextCursor ? 'を表示' : ''}
               </Text>
             </div>
-
-            {!query && !dir && pages.length > 0 ? (
-              <div className="flex shrink-0 items-center gap-2">
-                <Text as="span" variant="secondary" size="sm" id="page-sort-label">
-                  並び順
+          ) : dir ? null : (
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div className="flex min-w-0 flex-col gap-1">
+                <Text variant="heading" size="lg" as="h1">
+                  すべてのページ
                 </Text>
-                <Select
-                  value={sort}
-                  onValueChange={(value) => {
-                    if (typeof value !== 'string' || value === sort) return;
-                    void router.visit(indexHref(value as PageSort, query));
-                  }}
-                  aria-labelledby="page-sort-label"
-                  size="sm"
-                  renderValue={(value) =>
-                    SORT_OPTIONS.find((option) => option.value === value)?.label ?? '更新順'
-                  }
-                  className="w-32"
-                >
-                  {SORT_OPTIONS.map((option) => (
-                    <Select.Option key={option.value} value={option.value}>
-                      {option.label}
-                    </Select.Option>
-                  ))}
-                </Select>
+                <Text variant="secondary" size="sm">
+                  {pages.length}ページ{cursor || nextCursor ? 'を表示' : ''}
+                </Text>
               </div>
-            ) : null}
-          </div>
 
-          <form
-            method="get"
-            action="/"
-            role="search"
-            className="flex items-center gap-2 lg:hidden"
-            onSubmit={submitSearch}
-          >
-            {sort !== 'updated' ? <input type="hidden" name="sort" value={sort} /> : null}
-            <Input
-              key={query}
-              name="q"
-              type="search"
-              defaultValue={query}
-              enterKeyHint="search"
-              placeholder="ページを検索"
-              aria-label="ページを検索"
-              className="min-w-0 flex-1"
-            />
-            <Button
-              type="submit"
-              variant="secondary"
-              icon={<MagnifyingGlassIcon size={15} />}
-              shape="square"
-              aria-label="検索"
-            />
-          </form>
+              {pages.length > 0 ? (
+                <div className="flex shrink-0 items-center gap-2">
+                  <Text as="span" variant="secondary" size="sm" id="page-sort-label">
+                    並び順
+                  </Text>
+                  <Select
+                    value={sort}
+                    onValueChange={(value) => {
+                      if (typeof value !== 'string' || value === sort) return;
+                      void router.visit(indexHref(value as PageSort, query));
+                    }}
+                    aria-labelledby="page-sort-label"
+                    size="sm"
+                    renderValue={(value) =>
+                      SORT_OPTIONS.find((option) => option.value === value)?.label ?? '更新順'
+                    }
+                    className="w-32"
+                  >
+                    {SORT_OPTIONS.map((option) => (
+                      <Select.Option key={option.value} value={option.value}>
+                        {option.label}
+                      </Select.Option>
+                    ))}
+                  </Select>
+                </div>
+              ) : null}
+            </div>
+          )}
 
           {cursor && (query ? results.length : pages.length) === 0 ? (
             <Text variant="secondary">この位置より後のページはありません。</Text>
@@ -160,31 +129,37 @@ export default function Home({
             <Empty
               icon={<MagnifyingGlassIcon size={32} />}
               title="該当なし"
-              description={`「${query}」に一致するページはありません。このパスで新規作成できます。`}
+              description={`「${query}」に一致するページはありません。このクエリをパスにして新規作成できます。`}
               contents={
-                <div className="flex w-full max-w-sm flex-col items-center gap-3">
-                  <PagePathCreateForm
-                    pages={sidebarPages}
-                    defaultValue={query}
-                    ariaLabel="新しいページのパス"
-                  />
+                <div className="flex flex-col items-center gap-3">
+                  <Button
+                    type="button"
+                    variant="primary"
+                    icon={<PlusIcon size={15} />}
+                    onClick={() => openCreatePageDialog(query)}
+                  >
+                    このクエリで新規ページを作成
+                  </Button>
                   <Link className="text-sm text-kumo-link" href="/">
-                    ページ一覧に戻る
+                    すべてのページに戻る
                   </Link>
                 </div>
               }
             />
-          ) : !query && pages.length === 0 ? (
+          ) : !query && !dir && pages.length === 0 ? (
             <Empty
               icon={<FilesIcon size={32} />}
               title="まだページがありません"
               description="新しいページを作成してください。"
               contents={
-                <PagePathCreateForm
-                  pages={sidebarPages}
-                  ariaLabel="新しいページのパス"
-                  className="max-w-sm"
-                />
+                <Button
+                  type="button"
+                  variant="primary"
+                  icon={<PlusIcon size={15} />}
+                  onClick={() => openCreatePageDialog('')}
+                >
+                  新規ページを作成
+                </Button>
               }
             />
           ) : query ? (

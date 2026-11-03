@@ -60,7 +60,7 @@ describe('splitHighlight', () => {
 describe('palette actions', () => {
   const result = { id: 'page-1', title: 'Page 1', excerpt: 'excerpt' };
 
-  it('puts search results before the all-results action', () => {
+  it('puts search results before the all-results action when more results exist', () => {
     const actions = buildPaletteActions({
       trimmedQuery: 'page',
       results: [result],
@@ -68,12 +68,27 @@ describe('palette actions', () => {
       loading: false,
       error: null,
       recentPages: [],
+      hasMore: true,
     });
 
     expect(actions.map((action) => action.kind)).toEqual(['result', 'all']);
   });
 
-  it('returns only the all-results action when the search has no results', () => {
+  it('hides the all-results action when every result fits in the palette', () => {
+    const actions = buildPaletteActions({
+      trimmedQuery: 'page',
+      results: [result],
+      resultsQuery: 'page',
+      loading: false,
+      error: null,
+      recentPages: [],
+      hasMore: false,
+    });
+
+    expect(actions.map((action) => action.kind)).toEqual(['result']);
+  });
+
+  it('returns no actions when the search has no results', () => {
     const actions = buildPaletteActions({
       trimmedQuery: 'missing',
       results: [],
@@ -81,9 +96,30 @@ describe('palette actions', () => {
       loading: false,
       error: null,
       recentPages: [],
+      hasMore: false,
     });
 
-    expect(actions.map((action) => action.kind)).toEqual(['all']);
+    expect(actions).toEqual([]);
+  });
+
+  it('limits the palette to the top five results', () => {
+    const results = Array.from({ length: 6 }, (_, index) => ({
+      id: `page-${index}`,
+      title: `Page ${index}`,
+      excerpt: '',
+    }));
+    const actions = buildPaletteActions({
+      trimmedQuery: 'page',
+      results,
+      resultsQuery: 'page',
+      loading: false,
+      error: null,
+      recentPages: [],
+      hasMore: true,
+    });
+
+    expect(actions.filter((action) => action.kind === 'result')).toHaveLength(5);
+    expect(actions.at(-1)?.kind).toBe('all');
   });
 
   it('does not expose actions while a search is pending or failed', () => {
@@ -94,6 +130,7 @@ describe('palette actions', () => {
       loading: false,
       error: null,
       recentPages: [],
+      hasMore: false,
     };
 
     expect(buildPaletteActions({ ...base, loading: true })).toEqual([]);

@@ -1,5 +1,7 @@
 import type { RecentPage } from './useRecentPages';
 
+export const PALETTE_RESULT_LIMIT = 5;
+
 export type PaletteSearchResult = {
   id: string;
   title: string;
@@ -19,6 +21,7 @@ type BuildPaletteActionsInput = {
   loading: boolean;
   error: string | null;
   recentPages: RecentPage[];
+  hasMore: boolean;
 };
 
 export function normalizeSearchResults(value: unknown): PaletteSearchResult[] {
@@ -47,13 +50,16 @@ export function buildPaletteActions({
   loading,
   error,
   recentPages,
+  hasMore,
 }: BuildPaletteActionsInput): PaletteAction[] {
   if (trimmedQuery) {
     if (loading || error || resultsQuery !== trimmedQuery) return [];
 
-    const allAction: PaletteAction = { kind: 'all', query: trimmedQuery };
-    const resultActions = results.map((result): PaletteAction => ({ kind: 'result', result }));
-    return [...resultActions, allAction];
+    const resultActions = results
+      .slice(0, PALETTE_RESULT_LIMIT)
+      .map((result): PaletteAction => ({ kind: 'result', result }));
+    if (!hasMore) return resultActions;
+    return [...resultActions, { kind: 'all', query: trimmedQuery }];
   }
 
   return recentPages.map((page): PaletteAction => ({ kind: 'recent', page }));

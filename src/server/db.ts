@@ -102,6 +102,7 @@ type RevisionRow = {
   version: number;
   markdown: string;
   author_id: string | null;
+  author_name?: string | null;
   manual: number;
   created_at: number;
 };
@@ -495,6 +496,15 @@ export async function getPage(db: D1Database, pageId: string): Promise<PageRecor
   };
 }
 
+export async function getDeletedPageTitle(db: D1Database, pageId: string): Promise<string | null> {
+  await ensureSchema(db);
+  const row = await db
+    .prepare('SELECT title FROM page WHERE id = ? AND deleted_at IS NOT NULL')
+    .bind(pageId)
+    .first<{ title: string }>();
+  return row?.title ?? null;
+}
+
 export async function createPage(
   db: D1Database,
   title: string,
@@ -722,7 +732,12 @@ export async function getRevision(
 export async function listRevisions(db: D1Database, pageId: string): Promise<RevisionRecord[]> {
   await ensureSchema(db);
   const result = await db
-    .prepare('SELECT * FROM revision WHERE page_id = ? ORDER BY version DESC LIMIT 50')
+    .prepare(
+      `SELECT r.*, u.display_name AS author_name
+       FROM revision r
+       LEFT JOIN app_user u ON u.id = r.author_id
+       WHERE r.page_id = ? ORDER BY r.version DESC LIMIT 50`,
+    )
     .bind(pageId)
     .all<RevisionRow>();
   return (result.results ?? []).map(toRevision);
@@ -735,6 +750,7 @@ function toRevision(row: RevisionRow): RevisionRecord {
     version: row.version,
     markdown: row.markdown,
     authorId: row.author_id,
+    authorName: row.author_name ?? null,
     manual: row.manual,
     createdAt: row.created_at,
   };

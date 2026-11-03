@@ -64,6 +64,7 @@ export type RevisionRecord = {
   version: number;
   markdown: string;
   authorId: string | null;
+  authorName: string | null;
   manual: number;
   createdAt: number;
 };
