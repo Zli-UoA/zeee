@@ -16,7 +16,7 @@ export function remarkEmojis({ emojis }: { emojis: CustomEmoji[] }) {
         }
         const parts: WikiNode[] = [];
         let last = 0;
-        for (const match of child.value.matchAll(/:([a-z0-9_-]{1,64}):/g)) {
+        for (const match of child.value.matchAll(/:([^:\r\n]{1,100}):/gu)) {
           const emoji = names.get(match[1]);
           if (!emoji) continue;
           if (match.index > last)
@@ -34,7 +34,7 @@ export function remarkEmojis({ emojis }: { emojis: CustomEmoji[] }) {
 }
 export function emojiCompletion(markdown: string, pos: number, emojis: CustomEmoji[]) {
   const before = maskCode(markdown).slice(0, pos);
-  const match = /(?:^|[\s(])(:([a-z0-9_-]{0,64}))$/.exec(before);
+  const match = /(?:^|[\s(])(:([^:\s]{0,100}))$/u.exec(before);
   if (!match) return null;
   return {
     from: pos - match[1].length,

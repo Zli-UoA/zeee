@@ -54,8 +54,16 @@ export class EmojiClient {
           !Number.isInteger(value.version)
         )
           throw new Error('Invalid catalog entry');
+        if (!/^[a-z0-9_-]{1,64}$/.test(value.name)) throw new Error('Invalid emoji name');
         for (const name of [value.name, ...value.aliases]) {
-          if (typeof name !== 'string' || !/^[a-z0-9_-]{1,64}$/.test(name) || names.has(name))
+          if (
+            typeof name !== 'string' ||
+            !name ||
+            Array.from(name).length > 100 ||
+            name.trim() !== name ||
+            /[:\p{Cc}]/u.test(name) ||
+            names.has(name)
+          )
             throw new Error('Invalid catalog names');
           names.add(name);
         }
