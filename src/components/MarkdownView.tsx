@@ -1,3 +1,5 @@
+import { useEmojis } from '../emoji/useEmojis';
+import { remarkEmojis } from '../emoji/markdown';
 import {
   createElement,
   isValidElement,
@@ -72,6 +74,7 @@ export function MarkdownView({
   onMobilePanelOpenChange,
   onSidePanelInfoChange,
 }: Props) {
+  const { emojis } = useEmojis();
   const articleRef = useRef<HTMLElement>(null);
   const [toc, setToc] = useState<TocItem[]>([]);
   const [backlinks, setBacklinks] = useState<Backlink[] | null>(null);
@@ -126,6 +129,17 @@ export function MarkdownView({
 
   const components = useMemo<Components>(
     () => ({
+      img({ src, alt }) {
+        const custom = emojis.some((e) => e.image_url === src);
+        return (
+          <img
+            src={src}
+            alt={alt ?? ''}
+            loading="lazy"
+            className={custom ? 'zeee-custom-emoji' : undefined}
+          />
+        );
+      },
       a({ node, href, children }) {
         const state = node?.properties?.dataWikiState;
         const wikiTitle = node?.properties?.dataWikiTitle;
@@ -178,7 +192,7 @@ export function MarkdownView({
         return <Heading level={6} {...props} />;
       },
     }),
-    [pages],
+    [pages, emojis],
   );
 
   const hasToc = toc.length > 0;
@@ -232,7 +246,11 @@ export function MarkdownView({
             ref={articleRef}
           >
             <ReactMarkdown
-              remarkPlugins={[remarkGfm, [remarkWikiLinks, { resolve }]]}
+              remarkPlugins={[
+                remarkGfm,
+                [remarkWikiLinks, { resolve }],
+                [remarkEmojis, { emojis }],
+              ]}
               rehypePlugins={[
                 [rehypeSanitize, sanitizeSchema],
                 rehypeHeadings,

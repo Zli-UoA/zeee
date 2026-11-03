@@ -1,3 +1,4 @@
+import { useEmojis } from '../emoji/useEmojis';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Link } from '@void/react';
 import { Button, DropdownMenu, LinkProvider, Sidebar, Text, useSidebar } from '@cloudflare/kumo';
@@ -50,6 +51,7 @@ export function AppShell({
   dir,
   children,
 }: Props) {
+  const { management_url: emojiManagementUrl } = useEmojis();
   const [livePages, setLivePages] = useState(pages);
   const [liveTitle, setLiveTitle] = useState(activeTitle);
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -245,6 +247,17 @@ export function AppShell({
                 >
                   <PlusIcon size={18} />
                 </Button>
+                {emojiManagementUrl ? (
+                  <a
+                    href={emojiManagementUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-sm text-kumo-subtle hover:text-kumo-default"
+                    title="絵文字を管理"
+                  >
+                    絵文字
+                  </a>
+                ) : null}
                 <AccountMenu user={user} />
               </div>
             </div>
