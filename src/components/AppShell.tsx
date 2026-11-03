@@ -330,7 +330,7 @@ function AppSidebar({
     <>
       {!isMobile && open ? (
         <div
-          className="fixed inset-x-0 top-14 bottom-0 z-[15] bg-kumo-recessed/40"
+          className="fixed inset-x-0 top-14 bottom-0 z-[15] bg-kumo-contrast/20 backdrop-blur-[1px]"
           aria-hidden="true"
           onClick={closeSidebar}
         />
