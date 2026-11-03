@@ -298,118 +298,152 @@ function AppSidebar({
   isTrash,
   isBrowse,
 }: AppSidebarProps) {
-  const { open, isMobile } = useSidebar();
+  const { open, setOpen, isMobile } = useSidebar();
   const rootPages = useMemo(() => listRootPages(pages), [pages]);
 
+  function closeSidebar() {
+    setOpen(false);
+    requestAnimationFrame(() => {
+      document.querySelector<HTMLButtonElement>('header [data-sidebar="trigger"]')?.focus();
+    });
+  }
+
+  useEffect(() => {
+    if (isMobile || !open) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || event.defaultPrevented) return;
+      const active = document.activeElement;
+      if (
+        active instanceof Element &&
+        active.closest('[role="dialog"][aria-modal="true"], #page-history-panel')
+      ) {
+        return;
+      }
+      event.preventDefault();
+      closeSidebar();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isMobile, open]);
+
   return (
-    <Sidebar
-      id="pages-nav"
-      inert={!isMobile && !open ? true : undefined}
-      aria-hidden={!isMobile && !open ? true : undefined}
-    >
-      <Sidebar.Header className="h-14 justify-between px-3 md:hidden">
-        <Brand />
-        <Sidebar.Close className="size-8" aria-label="ページ一覧を閉じる" />
-      </Sidebar.Header>
-
-      <Sidebar.Content>
-        <Sidebar.Group>
-          <Sidebar.Menu>
-            <Sidebar.MenuButton
-              href="/"
-              icon={HouseIcon}
-              active={isHome}
-              aria-current={isHome ? 'page' : undefined}
-            >
-              ホーム
-            </Sidebar.MenuButton>
-          </Sidebar.Menu>
-        </Sidebar.Group>
-
-        {recentPages.length > 0 ? (
-          <Sidebar.Group>
-            <Sidebar.GroupLabel>最近見たページ</Sidebar.GroupLabel>
-            <Sidebar.Menu>
-              {recentPages.map((page) => (
-                <Sidebar.MenuButton
-                  href={`/pages/${page.id}`}
-                  size="sm"
-                  icon={ClockCounterClockwiseIcon}
-                  active={page.id === activePageId}
-                  aria-current={page.id === activePageId ? 'page' : undefined}
-                  key={page.id}
-                >
-                  {page.title}
-                </Sidebar.MenuButton>
-              ))}
-            </Sidebar.Menu>
-          </Sidebar.Group>
-        ) : null}
-
-        <SpaceNav
-          pages={pages}
-          activeSpace={activeSpace}
-          activePageId={activePageId}
-          activeTitle={liveTitle}
-          activeDirectory={activeDirectory}
-          isMobile={isMobile}
+    <>
+      {!isMobile && open ? (
+        <div
+          className="fixed inset-x-0 top-14 bottom-0 z-[15] bg-kumo-recessed/40"
+          aria-hidden="true"
+          onClick={closeSidebar}
         />
+      ) : null}
+      <Sidebar
+        id="pages-nav"
+        inert={!isMobile && !open ? true : undefined}
+        aria-hidden={!isMobile && !open ? true : undefined}
+      >
+        <Sidebar.Header className="h-14 justify-between px-3 md:hidden">
+          <Brand />
+          <Sidebar.Close className="size-8" aria-label="ページ一覧を閉じる" />
+        </Sidebar.Header>
 
-        {rootPages.length > 0 ? (
+        <Sidebar.Content>
           <Sidebar.Group>
-            <Sidebar.GroupLabel>ルートページ</Sidebar.GroupLabel>
             <Sidebar.Menu>
-              {rootPages.map((page) => (
-                <Sidebar.MenuButton
-                  href={`/pages/${page.id}`}
-                  size="sm"
-                  icon={FileTextIcon}
-                  active={page.id === activePageId}
-                  aria-current={page.id === activePageId ? 'page' : undefined}
-                  key={page.id}
-                >
-                  {page.name}
-                </Sidebar.MenuButton>
-              ))}
+              <Sidebar.MenuButton
+                href="/"
+                icon={HouseIcon}
+                active={isHome}
+                aria-current={isHome ? 'page' : undefined}
+              >
+                ホーム
+              </Sidebar.MenuButton>
             </Sidebar.Menu>
           </Sidebar.Group>
-        ) : null}
 
-        <Sidebar.Group>
-          <Sidebar.Menu>
+          {recentPages.length > 0 ? (
+            <Sidebar.Group>
+              <Sidebar.GroupLabel>最近見たページ</Sidebar.GroupLabel>
+              <Sidebar.Menu>
+                {recentPages.map((page) => (
+                  <Sidebar.MenuButton
+                    href={`/pages/${page.id}`}
+                    size="sm"
+                    icon={ClockCounterClockwiseIcon}
+                    active={page.id === activePageId}
+                    aria-current={page.id === activePageId ? 'page' : undefined}
+                    key={page.id}
+                  >
+                    {page.title}
+                  </Sidebar.MenuButton>
+                ))}
+              </Sidebar.Menu>
+            </Sidebar.Group>
+          ) : null}
+
+          <SpaceNav
+            pages={pages}
+            activeSpace={activeSpace}
+            activePageId={activePageId}
+            activeTitle={liveTitle}
+            activeDirectory={activeDirectory}
+            isMobile={isMobile}
+          />
+
+          {rootPages.length > 0 ? (
+            <Sidebar.Group>
+              <Sidebar.GroupLabel>ルートページ</Sidebar.GroupLabel>
+              <Sidebar.Menu>
+                {rootPages.map((page) => (
+                  <Sidebar.MenuButton
+                    href={`/pages/${page.id}`}
+                    size="sm"
+                    icon={FileTextIcon}
+                    active={page.id === activePageId}
+                    aria-current={page.id === activePageId ? 'page' : undefined}
+                    key={page.id}
+                  >
+                    {page.name}
+                  </Sidebar.MenuButton>
+                ))}
+              </Sidebar.Menu>
+            </Sidebar.Group>
+          ) : null}
+
+          <Sidebar.Group>
+            <Sidebar.Menu>
+              <Sidebar.MenuButton
+                href="/browse"
+                icon={TreeStructureIcon}
+                active={isBrowse}
+                aria-current={isBrowse ? 'page' : undefined}
+              >
+                すべてのページ
+              </Sidebar.MenuButton>
+            </Sidebar.Menu>
+          </Sidebar.Group>
+
+          {pages.length === 0 ? (
+            <div className="px-3 py-3">
+              <Text variant="secondary" size="sm">
+                まだページがありません。
+              </Text>
+            </div>
+          ) : null}
+        </Sidebar.Content>
+
+        <Sidebar.Footer>
+          <Sidebar.Menu className="w-full">
             <Sidebar.MenuButton
-              href="/browse"
-              icon={TreeStructureIcon}
-              active={isBrowse}
-              aria-current={isBrowse ? 'page' : undefined}
+              href="/trash"
+              icon={TrashIcon}
+              active={isTrash}
+              aria-current={isTrash ? 'page' : undefined}
             >
-              すべてのページ
+              ゴミ箱
             </Sidebar.MenuButton>
           </Sidebar.Menu>
-        </Sidebar.Group>
-
-        {pages.length === 0 ? (
-          <div className="px-3 py-3">
-            <Text variant="secondary" size="sm">
-              まだページがありません。
-            </Text>
-          </div>
-        ) : null}
-      </Sidebar.Content>
-
-      <Sidebar.Footer>
-        <Sidebar.Menu className="w-full">
-          <Sidebar.MenuButton
-            href="/trash"
-            icon={TrashIcon}
-            active={isTrash}
-            aria-current={isTrash ? 'page' : undefined}
-          >
-            ゴミ箱
-          </Sidebar.MenuButton>
-        </Sidebar.Menu>
-      </Sidebar.Footer>
-    </Sidebar>
+        </Sidebar.Footer>
+      </Sidebar>
+    </>
   );
 }
 
