@@ -9,32 +9,46 @@ type Props = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   pages: PagePathPage[];
+  initialValue?: string;
 };
 
-export function CreatePageDialog({ open, onOpenChange, pages }: Props) {
+export function CreatePageDialog({ open, onOpenChange, pages, initialValue = '' }: Props) {
   const router = useRouter();
   const formId = useId();
+  const hintId = useId();
   const errorId = useId();
   const inputRef = useRef<HTMLInputElement>(null);
-  const [title, setTitle] = useState('');
+  const [title, setTitle] = useState(initialValue);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const trimmed = title.trim();
+  const incomplete = trimmed.endsWith('/');
   const validation = useMemo(
-    () => (title.trim() ? validatePagePath(title, pages) : null),
-    [title, pages],
+    () => (trimmed && !incomplete ? validatePagePath(title, pages) : null),
+    [title, trimmed, incomplete, pages],
   );
+  const visibleError = error || (validation && !validation.ok ? validation.message : '');
 
   useEffect(() => {
     if (!open) return;
-    setTitle('');
+    setTitle(initialValue);
     setBusy(false);
     setError('');
-    const timer = window.setTimeout(() => inputRef.current?.focus(), 0);
+    const timer = window.setTimeout(() => {
+      const input = inputRef.current;
+      if (!input) return;
+      input.focus();
+      input.setSelectionRange(input.value.length, input.value.length);
+    }, 0);
     return () => window.clearTimeout(timer);
-  }, [open]);
+  }, [open, initialValue]);
 
   async function createPage() {
     if (busy) return;
+    if (incomplete) {
+      setError('最後のセグメントを入力してください。');
+      return;
+    }
     const result = validatePagePath(title, pages);
     if (!result.ok) {
       setError(result.message);
@@ -52,7 +66,7 @@ export function CreatePageDialog({ open, onOpenChange, pages }: Props) {
     void router.visit(`/pages/${created.id}`);
   }
 
-  const visibleError = error || (validation && !validation.ok ? validation.message : '');
+  const canCreate = Boolean(trimmed) && !incomplete && validation !== null && validation.ok;
 
   return (
     <LayerDialog.Root
@@ -66,6 +80,7 @@ export function CreatePageDialog({ open, onOpenChange, pages }: Props) {
         <LayerDialog.Title>新規ページ</LayerDialog.Title>
         <LayerDialog.Description>
           ページのパスを入力してください。「/」でディレクトリを区切ります。
+          ページは階層の末尾にだけ作れます。
         </LayerDialog.Description>
         <LayerDialog.Body>
           <form
@@ -89,13 +104,22 @@ export function CreatePageDialog({ open, onOpenChange, pages }: Props) {
               required
               maxLength={200}
               invalid={Boolean(visibleError)}
-              errorId={visibleError ? errorId : undefined}
+              errorId={visibleError ? errorId : hintId}
             />
-            {visibleError ? (
+            {incomplete ? (
+              <Text id={hintId} variant="secondary" size="sm">
+                最後のセグメントを入力してください。
+              </Text>
+            ) : visibleError ? (
               <Text id={errorId} variant="error" size="sm" role="alert">
                 {visibleError}
               </Text>
-            ) : null}
+            ) : (
+              <Text id={hintId} variant="secondary" size="sm">
+                既存ページの下に子ページは作成できません。ページをディレクトリにしたい場合は、先に
+                そのページのパスを変更するか削除してください。
+              </Text>
+            )}
           </form>
         </LayerDialog.Body>
         <LayerDialog.Actions dismissLabel="キャンセル">
@@ -103,7 +127,7 @@ export function CreatePageDialog({ open, onOpenChange, pages }: Props) {
             type="submit"
             form={formId}
             loading={busy}
-            disabled={!title.trim() || busy || (validation !== null && !validation.ok)}
+            disabled={!canCreate || busy}
           >
             作成
           </LayerDialog.Action>

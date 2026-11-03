@@ -9,20 +9,20 @@ import {
   type MouseEvent,
   type ReactNode,
 } from 'react';
-import { Link, useRouter } from '@void/react';
+import { Link } from '@void/react';
 import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeSanitize, { defaultSchema } from 'rehype-sanitize';
 import rehypeHighlight from 'rehype-highlight';
 import { Badge, Button, Text } from '@cloudflare/kumo';
 import { CheckIcon, CopyIcon } from '@phosphor-icons/react';
-import { createPageByPath } from '../client/pagePathApi';
+import { openCreatePageDialog } from '../client/createPageEvents';
 import type { Backlink } from '../server/backlinks';
 import type { PageNavigation } from '../server/types';
 import { rehypeHeadings } from '../markdown/headings';
 import { sameToc, type TocItem } from '../markdown/toc';
 import { createWikiResolver, remarkWikiLinks, type LinkTarget } from '../markdown/wiki';
-import { validatePagePath } from '../shared/pagePath';
+import { MobileSheet } from './MobileSheet';
 
 export type SidePanelInfo = {
   available: boolean;
@@ -38,6 +38,8 @@ type Props = {
   pageTitle: string;
   sidePanel?: boolean;
   sidePanelOpen: boolean;
+  mobilePanelOpen?: boolean;
+  onMobilePanelOpenChange?: (open: boolean) => void;
   onSidePanelInfoChange?: (info: SidePanelInfo) => void;
 };
 
@@ -66,6 +68,8 @@ export function MarkdownView({
   pageTitle,
   sidePanel = true,
   sidePanelOpen,
+  mobilePanelOpen = false,
+  onMobilePanelOpenChange,
   onSidePanelInfoChange,
 }: Props) {
   const articleRef = useRef<HTMLElement>(null);
@@ -126,11 +130,7 @@ export function MarkdownView({
         const state = node?.properties?.dataWikiState;
         const wikiTitle = node?.properties?.dataWikiTitle;
         if (state === 'missing' && typeof wikiTitle === 'string') {
-          return (
-            <MissingWikiLink title={wikiTitle} pages={pages}>
-              {children}
-            </MissingWikiLink>
-          );
+          return <MissingWikiLink title={wikiTitle}>{children}</MissingWikiLink>;
         }
         const external = href?.startsWith('http://') || href?.startsWith('https://');
         const internal = href?.startsWith('/') && !href.startsWith('//');
@@ -182,13 +182,16 @@ export function MarkdownView({
   );
 
   const hasToc = toc.length > 0;
-  const hasHeadingMarkdown = useMemo(() => markdownHasHeadings(markdown), [markdown]);
-  const showMobileToc = hasToc || hasHeadingMarkdown;
   const hasBacklinks = (backlinks?.length ?? 0) > 0;
   const hasSidePanelContent = hasToc || hasBacklinks || backlinksError;
   const panelAvailable = sidePanel && hasSidePanelContent;
   const showSidePanel = panelAvailable && sidePanelOpen;
   const wideProse = panelAvailable && !sidePanelOpen;
+  const sidePanelLabel = hasToc
+    ? hasBacklinks || backlinksError
+      ? '目次とバックリンク'
+      : '目次'
+    : 'バックリンク';
 
   useEffect(() => {
     onSidePanelInfoChange?.({
@@ -197,6 +200,22 @@ export function MarkdownView({
       hasBacklinks: hasBacklinks || backlinksError,
     });
   }, [hasSidePanelContent, hasToc, hasBacklinks, backlinksError, onSidePanelInfoChange]);
+
+  useEffect(() => {
+    if (mobilePanelOpen && !panelAvailable) onMobilePanelOpenChange?.(false);
+  }, [mobilePanelOpen, panelAvailable, onMobilePanelOpenChange]);
+
+  const panelContent = (
+    <SidePanelContent
+      toc={toc}
+      backlinks={backlinks}
+      backlinksError={backlinksError}
+      onRetryBacklinks={() => {
+        setBacklinksError(false);
+        setBacklinksRetry((value) => value + 1);
+      }}
+    />
+  );
 
   return (
     <div className="min-h-[60svh] px-5 py-7 sm:px-8 sm:py-9 lg:min-h-[calc(100vh-18rem)]">
@@ -208,15 +227,6 @@ export function MarkdownView({
         }
       >
         <div className={wideProse ? 'min-w-0 max-w-[52rem]' : 'min-w-0'}>
-          {showMobileToc ? (
-            <details className="mb-5 border-b border-kumo-line pb-3 xl:hidden">
-              <summary className="cursor-pointer py-2 text-sm font-medium text-kumo-strong">
-                目次
-              </summary>
-              <div className="pt-2">{hasToc ? <TocNav items={toc} /> : null}</div>
-            </details>
-          ) : null}
-
           <article
             className={wideProse ? 'zeee-prose zeee-prose-wide' : 'zeee-prose'}
             ref={articleRef}
@@ -233,73 +243,11 @@ export function MarkdownView({
               {markdown}
             </ReactMarkdown>
           </article>
-
-          {hasBacklinks ? (
-            <details className="mt-6 border-t border-kumo-line pt-4 xl:hidden">
-              <summary className="cursor-pointer py-2 text-sm font-medium text-kumo-strong">
-                バックリンク（{backlinks?.length ?? 0}）
-              </summary>
-              <div className="pt-2">
-                <BacklinkList backlinks={backlinks} />
-              </div>
-            </details>
-          ) : null}
-
-          {backlinksError ? (
-            <div className="mt-4 flex items-center gap-2 xl:hidden">
-              <Text variant="error" size="sm">
-                バックリンクを読み込めませんでした
-              </Text>
-              <Button
-                type="button"
-                variant="ghost"
-                onClick={() => {
-                  setBacklinksError(false);
-                  setBacklinksRetry((value) => value + 1);
-                }}
-              >
-                再試行
-              </Button>
-            </div>
-          ) : null}
         </div>
 
         {showSidePanel ? (
           <aside id="page-side-panel" className="hidden self-start xl:sticky xl:top-20 xl:block">
-            {hasToc ? (
-              <section aria-label="目次" className="mb-6">
-                <h2 className="mb-2 text-sm font-semibold text-kumo-subtle">目次</h2>
-                <TocNav items={toc} />
-              </section>
-            ) : null}
-
-            {hasBacklinks || backlinksError ? (
-              <section aria-label="バックリンク">
-                <div className="mb-2 flex items-center gap-2">
-                  <h2 className="text-sm font-semibold text-kumo-subtle">バックリンク</h2>
-                  {hasBacklinks ? <Badge variant="outline">{backlinks?.length}</Badge> : null}
-                </div>
-                {backlinksError ? (
-                  <div className="flex flex-col items-start gap-2">
-                    <Text variant="error" size="sm">
-                      読み込めませんでした
-                    </Text>
-                    <Button
-                      type="button"
-                      variant="secondary"
-                      onClick={() => {
-                        setBacklinksError(false);
-                        setBacklinksRetry((value) => value + 1);
-                      }}
-                    >
-                      再試行
-                    </Button>
-                  </div>
-                ) : (
-                  <BacklinkList backlinks={backlinks} />
-                )}
-              </section>
-            ) : null}
+            {panelContent}
           </aside>
         ) : null}
       </div>
@@ -321,7 +269,62 @@ export function MarkdownView({
           </Button>
         </div>
       ) : null}
+
+      <MobileSheet
+        open={Boolean(mobilePanelOpen && panelAvailable)}
+        onOpenChange={(open) => onMobilePanelOpenChange?.(open)}
+        title={sidePanelLabel}
+      >
+        {panelContent}
+      </MobileSheet>
     </div>
+  );
+}
+
+function SidePanelContent({
+  toc,
+  backlinks,
+  backlinksError,
+  onRetryBacklinks,
+}: {
+  toc: TocItem[];
+  backlinks: Backlink[] | null;
+  backlinksError: boolean;
+  onRetryBacklinks: () => void;
+}) {
+  const hasToc = toc.length > 0;
+  const hasBacklinks = (backlinks?.length ?? 0) > 0;
+
+  return (
+    <>
+      {hasToc ? (
+        <section aria-label="目次" className="mb-6">
+          <h2 className="mb-2 text-sm font-semibold text-kumo-subtle">目次</h2>
+          <TocNav items={toc} />
+        </section>
+      ) : null}
+
+      {hasBacklinks || backlinksError ? (
+        <section aria-label="バックリンク">
+          <div className="mb-2 flex items-center gap-2">
+            <h2 className="text-sm font-semibold text-kumo-subtle">バックリンク</h2>
+            {hasBacklinks ? <Badge variant="outline">{backlinks?.length}</Badge> : null}
+          </div>
+          {backlinksError ? (
+            <div className="flex flex-col items-start gap-2">
+              <Text variant="error" size="sm">
+                読み込めませんでした
+              </Text>
+              <Button type="button" variant="secondary" onClick={onRetryBacklinks}>
+                再試行
+              </Button>
+            </div>
+          ) : (
+            <BacklinkList backlinks={backlinks} />
+          )}
+        </section>
+      ) : null}
+    </>
   );
 }
 
@@ -398,60 +401,18 @@ function Heading({
   );
 }
 
-function MissingWikiLink({
-  title,
-  pages,
-  children,
-}: {
-  title: string;
-  pages: PageNavigation[];
-  children?: ReactNode;
-}) {
-  const router = useRouter();
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
-
-  async function create() {
-    if (busy) return;
-    setBusy(true);
-    setError('');
-    const validation = validatePagePath(title, pages);
-    if (!validation.ok) {
-      setError(validation.message);
-      setBusy(false);
-      return;
-    }
-    const result = await createPageByPath(validation.path);
-    if (!result.ok) {
-      setError(result.message);
-      setBusy(false);
-      return;
-    }
-    void router.visit(`/pages/${result.id}`);
-  }
-
+function MissingWikiLink({ title, children }: { title: string; children?: ReactNode }) {
   return (
     <span className="zeee-wiki-missing-wrap">
       <button
         type="button"
         className="zeee-wiki-missing"
-        onClick={() => void create()}
-        disabled={busy}
+        onClick={() => openCreatePageDialog(title)}
         aria-label={`「${title}」というページを作成`}
-        title={`「${title}」はまだありません。クリックで作成`}
+        title={`「${title}」はまだありません。クリックで新規ページを作成`}
       >
         {children}
       </button>
-      {busy ? (
-        <span className="zeee-wiki-status" role="status">
-          作成中…
-        </span>
-      ) : null}
-      {error ? (
-        <span className="zeee-wiki-status" role="alert">
-          {error}
-        </span>
-      ) : null}
     </span>
   );
 }
@@ -505,14 +466,6 @@ function CodeBlock({ node, children }: { node?: HastNode; children?: ReactNode }
         </p>
       ) : null}
     </div>
-  );
-}
-
-function markdownHasHeadings(markdown: string): boolean {
-  const text = markdown.replace(/^```[\s\S]*?^```[ \t]*$/gm, '');
-  return (
-    /^(?: {0,3}#{1,4})[ \t]+\S/m.test(text) ||
-    /^(?: {0,3}[^\n]+)\n(?: {0,3}[=-]+)[ \t]*$/m.test(text)
   );
 }
 

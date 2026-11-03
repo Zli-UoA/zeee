@@ -1,6 +1,12 @@
 import { defineHandler, defineHead } from 'void';
 import { getSessionUser, loginPath } from '../../src/server/auth';
-import { getPage, listLinkTargets, listPageNavigation, listRevisions } from '../../src/server/db';
+import {
+  getDeletedPageTitle,
+  getPage,
+  listLinkTargets,
+  listPageNavigation,
+  listRevisions,
+} from '../../src/server/db';
 import { pathParam } from '../../src/server/http';
 import { readRecentPages } from '../../src/server/recent';
 import type { RecentPage } from '../../src/shared/recent';
@@ -16,6 +22,7 @@ import type {
 export type Props = {
   user: SessionUser | null;
   page: PageRecord | null;
+  deletedPageTitle: string | null;
   revisions: RevisionRecord[];
   pages: PageNavigation[];
   recentPages: RecentPage[];
@@ -35,6 +42,7 @@ export const loader = defineHandler(async (c): Promise<Props> => {
     return {
       user: null,
       page: null,
+      deletedPageTitle: null,
       revisions: [],
       pages: [],
       recentPages: [],
@@ -53,6 +61,7 @@ export const loader = defineHandler(async (c): Promise<Props> => {
     return {
       user,
       page: null,
+      deletedPageTitle: await getDeletedPageTitle(env.DB, id),
       revisions: [],
       pages,
       recentPages: readRecentPages(c, pages, user.id),
@@ -64,6 +73,7 @@ export const loader = defineHandler(async (c): Promise<Props> => {
   return {
     user,
     page,
+    deletedPageTitle: null,
     revisions: await listRevisions(env.DB, id),
     pages,
     recentPages: readRecentPages(c, pages, user.id, page.id),

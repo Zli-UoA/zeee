@@ -15,13 +15,16 @@ import {
   ClockCounterClockwiseIcon,
   FileTextIcon,
   MagnifyingGlassIcon,
+  PlusIcon,
   WarningCircleIcon,
 } from '@phosphor-icons/react';
 import { splitHighlight } from '../client/highlight';
+import { openCreatePageDialog } from '../client/createPageEvents';
 import { PagePathContext } from './PagePathBreadcrumb';
 import {
   buildPaletteActions,
   normalizeSearchResults,
+  PALETTE_RESULT_LIMIT,
   type PaletteAction,
   type PaletteSearchResult,
 } from '../client/palette';
@@ -36,6 +39,8 @@ type Props = {
 type SearchResponse = {
   query?: unknown;
   results?: unknown;
+  nextCursor?: unknown;
+  total?: unknown;
 };
 
 function highlightedParts(text: string, query: string) {
@@ -66,6 +71,8 @@ export function CommandPalette({ open, onOpenChange, recentPages }: Props) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [activeIndex, setActiveIndex] = useState(0);
+  const [hasMore, setHasMore] = useState(false);
+  const [total, setTotal] = useState(0);
   const [retryToken, setRetryToken] = useState(0);
 
   const trimmedQuery = query.trim();
@@ -78,6 +85,8 @@ export function CommandPalette({ open, onOpenChange, recentPages }: Props) {
     setLoading(false);
     setError(null);
     setActiveIndex(0);
+    setHasMore(false);
+    setTotal(0);
   }, [open]);
 
   useEffect(() => {
@@ -93,6 +102,8 @@ export function CommandPalette({ open, onOpenChange, recentPages }: Props) {
       setResultsQuery(null);
       setLoading(false);
       setError(null);
+      setHasMore(false);
+      setTotal(0);
       return;
     }
 
@@ -101,24 +112,39 @@ export function CommandPalette({ open, onOpenChange, recentPages }: Props) {
     setError(null);
     setResults([]);
     setResultsQuery(null);
+    setHasMore(false);
+    setTotal(0);
 
     const timer = window.setTimeout(() => {
       void (async () => {
         try {
-          const response = await fetch(`/api/search?q=${encodeURIComponent(trimmedQuery)}`, {
-            signal: controller.signal,
-            headers: { accept: 'application/json' },
-          });
+          const response = await fetch(
+            `/api/search?q=${encodeURIComponent(trimmedQuery)}&limit=${PALETTE_RESULT_LIMIT}`,
+            {
+              signal: controller.signal,
+              headers: { accept: 'application/json' },
+            },
+          );
           if (!response.ok) throw new Error(`search failed: ${response.status}`);
           const data = (await response.json()) as SearchResponse;
           if (controller.signal.aborted) return;
           setResults(normalizeSearchResults(data.results));
           setResultsQuery(trimmedQuery);
+          setHasMore(typeof data.nextCursor === 'string' && data.nextCursor.length > 0);
+          setTotal(
+            typeof data.total === 'number' && Number.isFinite(data.total)
+              ? data.total
+              : Array.isArray(data.results)
+                ? data.results.length
+                : 0,
+          );
           setLoading(false);
         } catch {
           if (controller.signal.aborted) return;
           setResults([]);
           setResultsQuery(null);
+          setHasMore(false);
+          setTotal(0);
           setError('検索できませんでした。通信状態を確認してもう一度お試しください。');
           setLoading(false);
         }
@@ -140,8 +166,9 @@ export function CommandPalette({ open, onOpenChange, recentPages }: Props) {
         loading,
         error,
         recentPages,
+        hasMore,
       }),
-    [trimmedQuery, results, resultsQuery, loading, error, recentPages],
+    [trimmedQuery, results, resultsQuery, loading, error, recentPages, hasMore],
   );
 
   useEffect(() => {
@@ -208,7 +235,7 @@ export function CommandPalette({ open, onOpenChange, recentPages }: Props) {
     : searchPending
       ? '検索中です'
       : trimmedQuery
-        ? `${results.length}件のページが見つかりました`
+        ? `${total}件のページが見つかりました`
         : recentPages.length > 0
           ? `最近見たページが${recentPages.length}件あります`
           : '';
@@ -242,8 +269,10 @@ export function CommandPalette({ open, onOpenChange, recentPages }: Props) {
 
   const resultsGroup = showResults ? (
     <div role="group" aria-label="検索結果">
-      <div className="px-2 pt-2 pb-1 text-sm font-semibold text-kumo-subtle">検索結果</div>
-      {results.map((result, index) => (
+      <div className="px-2 pt-2 pb-1 text-sm font-semibold text-kumo-subtle">
+        検索結果 {total}件{hasMore ? `（上位${PALETTE_RESULT_LIMIT}件を表示）` : ''}
+      </div>
+      {results.slice(0, PALETTE_RESULT_LIMIT).map((result, index) => (
         <PaletteOption
           key={result.id}
           id={`${baseId}-option-${index}`}
@@ -389,9 +418,22 @@ export function CommandPalette({ open, onOpenChange, recentPages }: Props) {
             ) : null}
 
             {showNoResults ? (
-              <p className="px-3 py-4 text-sm text-kumo-subtle">
-                「{trimmedQuery}」に一致するページはありません。
-              </p>
+              <div className="flex flex-col items-start gap-3 px-3 py-4">
+                <p className="text-sm text-kumo-subtle">
+                  「{trimmedQuery}」に一致するページはありません。
+                </p>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  icon={<PlusIcon size={15} />}
+                  onClick={() => {
+                    onOpenChange(false);
+                    openCreatePageDialog(trimmedQuery);
+                  }}
+                >
+                  このクエリで新規ページを作成
+                </Button>
+              </div>
             ) : null}
 
             {showEmptyRecent ? (

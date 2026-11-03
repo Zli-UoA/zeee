@@ -12,7 +12,9 @@ export function PagePathBreadcrumb({ title, className }: BreadcrumbProps) {
   if (!trail) {
     return (
       <nav aria-label="パンくずリスト" className={className}>
-        <span className="text-sm font-medium text-kumo-strong">ページ</span>
+        <Link href="/" className="text-sm text-kumo-subtle no-underline hover:text-kumo-default">
+          すべてのページ
+        </Link>
       </nav>
     );
   }
@@ -26,7 +28,7 @@ export function PagePathBreadcrumb({ title, className }: BreadcrumbProps) {
         href="/"
         className="shrink-0 text-sm text-kumo-subtle no-underline hover:text-kumo-default"
       >
-        ページ
+        すべてのページ
       </Link>
       {trail.directories.map((directory) => (
         <Fragment key={directory.path}>
@@ -59,14 +61,14 @@ export function DirectoryPathBreadcrumb({ path, className }: { path: string; cla
   const segments = pagePathSegments(path);
   return (
     <nav
-      aria-label="ディレクトリ"
+      aria-label="パンくずリスト"
       className={`flex min-w-0 flex-wrap items-center gap-2 ${className ?? ''}`}
     >
       <Link
         href="/"
         className="shrink-0 text-sm text-kumo-subtle no-underline hover:text-kumo-default"
       >
-        ページ
+        すべてのページ
       </Link>
       {segments.map((segment, index) => {
         const current = index === segments.length - 1;
@@ -77,7 +79,10 @@ export function DirectoryPathBreadcrumb({ path, className }: { path: string; cla
               /
             </span>
             {current ? (
-              <span aria-current="page" className="truncate text-sm font-medium text-kumo-strong">
+              <span
+                aria-current="location"
+                className="truncate text-sm font-medium text-kumo-strong"
+              >
                 {segment}
               </span>
             ) : (

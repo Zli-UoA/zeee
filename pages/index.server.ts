@@ -34,17 +34,19 @@ export type Props = {
   dir: string;
   sort: PageSort;
   results: SearchResult[];
+  totalResults: number;
   now: number;
   loginUrl: string;
 };
 
 export const head = defineHead<Props>((_c, props) => ({
-  title: props.query ? '検索結果' : props.dir || 'ページ',
+  title: props.query ? '検索結果' : props.dir || 'すべてのページ',
 }));
 
 export const loader = defineHandler(async (c): Promise<Props | Response> => {
   const url = new URL(c.req.url);
-  const dir = normalizeDirectoryPath(url.searchParams.get('dir'));
+  const query = (url.searchParams.get('q') ?? '').trim();
+  const dir = query ? '' : normalizeDirectoryPath(url.searchParams.get('dir'));
   const user = await getSessionUser(c);
   if (!user) {
     return {
@@ -59,13 +61,13 @@ export const loader = defineHandler(async (c): Promise<Props | Response> => {
       dir,
       sort: 'updated',
       results: [],
+      totalResults: 0,
       now: Date.now(),
       loginUrl: loginPath(c, '/'),
     };
   }
 
   const env = c.env as Env;
-  const query = (url.searchParams.get('q') ?? '').trim();
   try {
     const sort = parsePageSort(url.searchParams.get('sort'));
     const options = parsePagination(url.searchParams);
@@ -82,6 +84,7 @@ export const loader = defineHandler(async (c): Promise<Props | Response> => {
       dir,
       sort,
       results: query ? (slice.items as SearchResult[]) : [],
+      totalResults: query ? (slice.total ?? slice.items.length) : 0,
       nextCursor: slice.nextCursor,
       cursor: options.cursor ?? null,
       limit: slice.limit,

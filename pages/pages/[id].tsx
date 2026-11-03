@@ -6,6 +6,7 @@ import { Gate } from '../../src/components/Gate';
 export default function PageView({
   user,
   page,
+  deletedPageTitle,
   revisions,
   pages,
   recentPages,
@@ -19,6 +20,7 @@ export default function PageView({
       initialRecentPages={recentPages}
       activePageId={page?.id}
       activeTitle={page?.title}
+      activeNav={user && !page ? 'not-found' : undefined}
     >
       {!user ? (
         <Gate
@@ -29,8 +31,13 @@ export default function PageView({
       ) : !page ? (
         <Gate
           title="ページがない"
-          description="削除されたか、URL が違うかもしれない。"
-          action={{ href: '/', label: 'ページ一覧へ戻る' }}
+          description={
+            deletedPageTitle
+              ? `「${deletedPageTitle}」は削除されています。必要な場合はゴミ箱から復元できます。`
+              : 'URL が違うか、ページが存在しません。'
+          }
+          action={{ href: '/', label: 'すべてのページへ戻る' }}
+          secondaryAction={deletedPageTitle ? { href: '/trash', label: 'ゴミ箱を見る' } : undefined}
         />
       ) : (
         <Editor

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Link } from '@void/react';
+import { useRouter } from '@void/react';
 import { Button, Empty, LayerCard, LayerDialog, LinkButton, Text } from '@cloudflare/kumo';
 import { ArrowCounterClockwiseIcon, TrashIcon } from '@phosphor-icons/react';
 import type { Props } from './trash.server';
@@ -11,19 +11,22 @@ import type { DeletedPageSummary } from '../src/server/types';
 
 type Pending = { id: string; action: 'restore' | 'purge' } | null;
 
-type Notice = { kind: 'restored'; id: string; title: string } | { kind: 'purged'; title: string };
+type Notice = { kind: 'purged'; title: string };
 
 export default function TrashPage({
   user,
   pages,
   recentPages,
   deletedPages: initialDeletedPages,
+  totalDeletedPages: initialTotalDeletedPages,
   loginUrl,
   nextCursor,
   cursor,
   limit,
 }: Props) {
+  const router = useRouter();
   const [deletedPages, setDeletedPages] = useState(initialDeletedPages);
+  const [totalDeletedPages, setTotalDeletedPages] = useState(initialTotalDeletedPages);
   const [pending, setPending] = useState<Pending>(null);
   const [confirming, setConfirming] = useState<DeletedPageSummary | null>(null);
   const [shownConfirming, setShownConfirming] = useState<DeletedPageSummary | null>(null);
@@ -34,7 +37,8 @@ export default function TrashPage({
 
   useEffect(() => {
     setDeletedPages(initialDeletedPages);
-  }, [initialDeletedPages]);
+    setTotalDeletedPages(initialTotalDeletedPages);
+  }, [initialDeletedPages, initialTotalDeletedPages]);
 
   useEffect(() => {
     if (confirming) setShownConfirming(confirming);
@@ -48,6 +52,12 @@ export default function TrashPage({
     try {
       const response = await fetch(`/api/pages/${page.id}/undelete`, { method: 'POST' });
       if (!response.ok) {
+        if (response.status === 409) {
+          setError(
+            '同じパスのページが存在するため復元できません。先に既存ページのパスを変更するか、既存ページを削除してください。',
+          );
+          return;
+        }
         setError(
           response.status === 404
             ? 'ページが見つかりませんでした。すでに復元または削除された可能性があります。'
@@ -56,7 +66,8 @@ export default function TrashPage({
         return;
       }
       setDeletedPages((current) => current.filter((item) => item.id !== page.id));
-      setNotice({ kind: 'restored', id: page.id, title: page.title });
+      setTotalDeletedPages((current) => Math.max(0, current - 1));
+      void router.visit(`/pages/${page.id}`);
     } catch {
       setError('復元できませんでした。接続を確認して再試行してください。');
     } finally {
@@ -85,6 +96,7 @@ export default function TrashPage({
         return;
       }
       setDeletedPages((current) => current.filter((item) => item.id !== page.id));
+      setTotalDeletedPages((current) => Math.max(0, current - 1));
       setConfirming(null);
       setNotice({ kind: 'purged', title: page.title });
     } catch {
@@ -115,8 +127,8 @@ export default function TrashPage({
               ゴミ箱
             </Text>
             <Text variant="secondary" size="sm">
-              {deletedPages.length > 0
-                ? `削除済みのページ ${deletedPages.length}件。復元するか、完全に削除できます。`
+              {totalDeletedPages > 0
+                ? `削除済みのページ ${totalDeletedPages}件。復元するか、完全に削除できます。`
                 : '削除したページはここから復元できます。完全に削除するまで本文と履歴は残ります。'}
             </Text>
           </div>
@@ -127,20 +139,7 @@ export default function TrashPage({
               className="rounded-lg border border-kumo-line bg-kumo-tint px-4 py-3"
             >
               <Text variant="secondary" size="sm">
-                {notice.kind === 'restored'
-                  ? `「${notice.title}」を復元しました。`
-                  : `「${notice.title}」を完全に削除しました。`}
-                {notice.kind === 'restored' ? (
-                  <>
-                    {' '}
-                    <Link
-                      className="rounded-sm text-kumo-link focus-visible:ring-2 focus-visible:ring-kumo-brand focus-visible:outline-none"
-                      href={`/pages/${notice.id}`}
-                    >
-                      ページを開く
-                    </Link>
-                  </>
-                ) : null}
+                「{notice.title}」を完全に削除しました。
               </Text>
             </div>
           ) : null}
@@ -162,7 +161,7 @@ export default function TrashPage({
               description="ページを削除すると、ここに表示されます。"
               contents={
                 <LinkButton href="/" variant="secondary">
-                  ページ一覧へ戻る
+                  すべてのページへ戻る
                 </LinkButton>
               }
             />

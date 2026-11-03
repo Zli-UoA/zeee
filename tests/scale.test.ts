@@ -129,7 +129,9 @@ describe('keyset page lists', () => {
     expect((await listPages(db, { limit: 2 })).nextCursor).toBeNull();
     for (const p of (await listPages(db)).items) await softDeletePage(db, p.id);
     expect((await listPages(db)).items).toEqual([]);
-    expect((await listDeletedPages(db, { limit: 1 })).nextCursor).not.toBeNull();
+    const deleted = await listDeletedPages(db, { limit: 1 });
+    expect(deleted.total).toBe(2);
+    expect(deleted.nextCursor).not.toBeNull();
   });
 
   it('keeps the sidebar and all link candidates beyond the first page', async () => {
@@ -158,6 +160,8 @@ describe('keyset search', () => {
     it(`traverses every ${query === 'needle' ? 'FTS' : 'LIKE'} match with rank/time ties`, async () => {
       const { db, sqlite } = await fixture(67);
       await softDeletePage(db, 'page-0003');
+      const first = await searchPages(db, query, { limit: 9 });
+      expect(first.total).toBe(66);
       const ids: string[] = [];
       let cursor: string | null = null;
       do {
@@ -195,6 +199,7 @@ describe('keyset search', () => {
   it('returns no results for blank queries and safely quotes FTS syntax', async () => {
     const { db } = await fixture(3);
     expect((await searchPages(db, '  ')).items).toEqual([]);
+    expect((await searchPages(db, '  ')).total).toBe(0);
     expect((await searchPages(db, '" OR needle')).items).toEqual([]);
   });
 });
@@ -240,6 +245,7 @@ describe('cursor validation and HTTP/loader contract', () => {
       limit: 2,
       results: expect.any(Array),
       nextCursor: expect.any(String),
+      total: 267,
     });
     expect(await trashGET(ctx('/api/trash'))).toEqual({ pages: [], nextCursor: null, limit: 50 });
     const home = (await loader(ctx('/?limit=2&sort=title'))) as Props | Response;

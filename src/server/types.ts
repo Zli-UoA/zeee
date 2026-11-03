@@ -31,6 +31,7 @@ export type PageSlice<T> = {
   items: T[];
   nextCursor: string | null;
   limit: number;
+  total?: number;
 };
 
 export type PaginationOptions = {
@@ -64,6 +65,7 @@ export type RevisionRecord = {
   version: number;
   markdown: string;
   authorId: string | null;
+  authorName: string | null;
   manual: number;
   createdAt: number;
 };

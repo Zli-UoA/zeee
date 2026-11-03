@@ -102,6 +102,7 @@ type RevisionRow = {
   version: number;
   markdown: string;
   author_id: string | null;
+  author_name?: string | null;
   manual: number;
   created_at: number;
 };
@@ -374,6 +375,10 @@ export async function listDeletedPages(
   const limit = pageSize(options);
   const cursor = readCursor(options.cursor, ['trash']);
   await ensureSchema(db);
+  const totalRow = await db
+    .prepare('SELECT COUNT(*) AS count FROM page WHERE deleted_at IS NOT NULL')
+    .first<{ count: number }>();
+  const total = Number(totalRow?.count ?? 0);
   const after = cursor
     ? 'AND p.deleted_at <= ? AND (p.deleted_at < ? OR (p.deleted_at = ? AND p.id > ?))'
     : '';
@@ -391,7 +396,7 @@ export async function listDeletedPages(
     query: '',
     keys: [row.deleted_at, row.id],
   }));
-  return { ...slice, items: slice.items.map(toDeletedPageSummary) };
+  return { ...slice, items: slice.items.map(toDeletedPageSummary), total };
 }
 
 export function sortPageSummaries(pages: PageSummary[], sort: PageSort): PageSummary[] {
@@ -493,6 +498,15 @@ export async function getPage(db: D1Database, pageId: string): Promise<PageRecor
     updatedAt: row.updated_at,
     markdown: row.markdown,
   };
+}
+
+export async function getDeletedPageTitle(db: D1Database, pageId: string): Promise<string | null> {
+  await ensureSchema(db);
+  const row = await db
+    .prepare('SELECT title FROM page WHERE id = ? AND deleted_at IS NOT NULL')
+    .bind(pageId)
+    .first<{ title: string }>();
+  return row?.title ?? null;
 }
 
 export async function createPage(
@@ -722,7 +736,12 @@ export async function getRevision(
 export async function listRevisions(db: D1Database, pageId: string): Promise<RevisionRecord[]> {
   await ensureSchema(db);
   const result = await db
-    .prepare('SELECT * FROM revision WHERE page_id = ? ORDER BY version DESC LIMIT 50')
+    .prepare(
+      `SELECT r.*, u.display_name AS author_name
+       FROM revision r
+       LEFT JOIN app_user u ON u.id = r.author_id
+       WHERE r.page_id = ? ORDER BY r.version DESC LIMIT 50`,
+    )
     .bind(pageId)
     .all<RevisionRow>();
   return (result.results ?? []).map(toRevision);
@@ -735,6 +754,7 @@ function toRevision(row: RevisionRow): RevisionRecord {
     version: row.version,
     markdown: row.markdown,
     authorId: row.author_id,
+    authorName: row.author_name ?? null,
     manual: row.manual,
     createdAt: row.created_at,
   };
@@ -749,7 +769,7 @@ export async function searchPages(
   const trimmed = query.trim();
   if (trimmed.length > 500) throw new PaginationError('q must be at most 500 characters');
   const cursor = readCursor(options.cursor, ['fts', 'like'], trimmed);
-  if (!trimmed) return { items: [], nextCursor: null, limit };
+  if (!trimmed) return { items: [], nextCursor: null, limit, total: 0 };
   await ensureSchema(db);
   if (cursor?.kind === 'fts' || (!cursor && Array.from(trimmed).length >= 3)) {
     try {
@@ -758,6 +778,7 @@ export async function searchPages(
       const args = cursor
         ? [match, cursor.keys[0], cursor.keys[0], cursor.keys[1], limit + 1]
         : [match, limit + 1];
+      const total = await countSearchPages(db, trimmed, 'fts');
       const result = await db
         .prepare(`SELECT f.page_id AS id, f.title AS title,
         snippet(page_fts, 2, '', '', '…', 16) AS excerpt, rank,
@@ -773,7 +794,11 @@ export async function searchPages(
         query: trimmed,
         keys: [row.rank, row.id],
       }));
-      return { ...slice, items: slice.items.map(toSearchResult) };
+      return {
+        ...slice,
+        items: slice.items.map(toSearchResult),
+        total,
+      };
     } catch (error) {
       // Never change ranking midway through a cursor traversal.
       if (cursor) throw error;
@@ -787,6 +812,7 @@ export async function searchPages(
   const args = cursor
     ? [like, like, cursor.keys[0], cursor.keys[0], cursor.keys[0], cursor.keys[1], limit + 1]
     : [like, like, limit + 1];
+  const total = await countSearchPages(db, trimmed, 'like');
   const result = await db
     .prepare(`SELECT p.id, p.title,
     substr(COALESCE(b.markdown, ''), 1, ${EXCERPT_SOURCE_LENGTH}) AS excerpt,
@@ -802,7 +828,41 @@ export async function searchPages(
     query: trimmed,
     keys: [row.updated_at, row.id],
   }));
-  return { ...slice, items: slice.items.map(toSearchResult) };
+  return {
+    ...slice,
+    items: slice.items.map(toSearchResult),
+    total,
+  };
+}
+
+async function countSearchPages(
+  db: D1Database,
+  query: string,
+  kind: 'fts' | 'like',
+): Promise<number> {
+  if (kind === 'fts') {
+    const match = `"${query.replaceAll('"', '""')}"`;
+    const row = await db
+      .prepare(
+        `SELECT COUNT(*) AS count
+         FROM page_fts f JOIN page p ON p.id = f.page_id
+         WHERE page_fts MATCH ? AND p.deleted_at IS NULL`,
+      )
+      .bind(match)
+      .first<{ count: number }>();
+    return Number(row?.count ?? 0);
+  }
+
+  const like = `%${query}%`;
+  const row = await db
+    .prepare(
+      `SELECT COUNT(*) AS count
+       FROM page p LEFT JOIN page_body b ON b.page_id = p.id
+       WHERE p.deleted_at IS NULL AND (p.title LIKE ? OR b.markdown LIKE ?)`,
+    )
+    .bind(like, like)
+    .first<{ count: number }>();
+  return Number(row?.count ?? 0);
 }
 
 function toSearchResult(row: SearchRow): SearchResult {

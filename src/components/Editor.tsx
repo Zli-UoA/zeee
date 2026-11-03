@@ -5,7 +5,6 @@ import { useRouter } from '@void/react';
 import { Badge, Button, DropdownMenu, Empty, LayerCard, LayerDialog, Text } from '@cloudflare/kumo';
 import {
   ArrowClockwiseIcon,
-  ArrowCounterClockwiseIcon,
   ClockCounterClockwiseIcon,
   DotsThreeIcon,
   EyeIcon,
@@ -21,6 +20,8 @@ import type { LinkTarget } from '../markdown/wiki';
 import { updatePageTitleByPath } from '../client/pagePathApi';
 import { formatDate } from '../shared/format';
 import { pagePathName, validatePagePath } from '../shared/pagePath';
+import { MobileSheet } from './MobileSheet';
+import { PagePathBreadcrumb } from './PagePathBreadcrumb';
 import { PagePathInput } from './PagePathInput';
 import { RevisionPreview } from './RevisionPreview';
 import type { SidePanelInfo } from './MarkdownView';
@@ -34,6 +35,7 @@ const editorClassName =
   'min-h-[calc(60svh-3.5rem)] w-full flex-1 lg:min-h-[calc(100vh-18rem-4.5rem)]';
 
 const SIDE_PANEL_STORAGE_KEY = 'zeee.read-side-panel.v1';
+const DESKTOP_QUERY = '(min-width: 1280px)';
 
 type Props = {
   page: PageRecord;
@@ -53,11 +55,12 @@ type Mode = 'read' | 'edit';
 
 export function Editor({ page, user, revisions, pages, linkTargets }: Props) {
   const router = useRouter();
-  const historyRef = useRef<HTMLDivElement>(null);
   const renderTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const providerRef = useRef<ZeeeProvider | null>(null);
   const composingRef = useRef(false);
   const titleSaveSeqRef = useRef(0);
+  const outlineBeforeHistoryRef = useRef(false);
+  const previewFromHistoryRef = useRef(false);
   const [mode, setMode] = useState<Mode>('read');
   const [markdown, setMarkdown] = useState(page.markdown);
   const [collaboration, setCollaboration] = useState<Collaboration | null>(null);
@@ -70,6 +73,7 @@ export function Editor({ page, user, revisions, pages, linkTargets }: Props) {
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleteError, setDeleteError] = useState('');
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [outlineOpen, setOutlineOpen] = useState(false);
   const [sidePanelOpen, setSidePanelOpen] = useState(true);
   const [sidePanelInfo, setSidePanelInfo] = useState<SidePanelInfo>({
     available: false,
@@ -82,6 +86,7 @@ export function Editor({ page, user, revisions, pages, linkTargets }: Props) {
   const [restoreBusy, setRestoreBusy] = useState(false);
   const [restoreError, setRestoreError] = useState('');
   const [error, setError] = useState('');
+  const isDesktop = useMediaQuery(DESKTOP_QUERY);
   const targets = useMemo<LinkTarget[]>(
     () => linkTargets ?? pages.map((item) => ({ ...item, aliases: [] as string[] })),
     [linkTargets, pages],
@@ -261,26 +266,37 @@ export function Editor({ page, user, revisions, pages, linkTargets }: Props) {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [mode, collaboration, markdown, busy]);
 
-  useEffect(() => {
-    if (!historyOpen) return;
-    if (window.matchMedia('(max-width: 1279px)').matches) {
-      historyRef.current?.scrollIntoView({
-        behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches
-          ? 'instant'
-          : 'smooth',
-        block: 'start',
-      });
-    }
-  }, [historyOpen]);
-
   function toggleMode() {
     if (mode === 'read') {
+      setOutlineOpen(false);
       setMode('edit');
       return;
     }
     collaboration?.awareness.setLocalStateField('cursor', null);
     setMarkdown(collaboration?.text.toJSON() ?? markdown);
     setMode('read');
+  }
+
+  function toggleOutline() {
+    if (historyOpen) {
+      setHistoryOpen(false);
+      if (isDesktop) setSidePanelOpen(true);
+      else setOutlineOpen(true);
+      return;
+    }
+    if (isDesktop) setSidePanelOpen((open) => !open);
+    else setOutlineOpen((open) => !open);
+  }
+
+  function toggleHistory() {
+    if (!historyOpen) {
+      outlineBeforeHistoryRef.current = outlineOpen;
+      setOutlineOpen(false);
+      setHistoryOpen(true);
+      return;
+    }
+    setHistoryOpen(false);
+    if (!isDesktop && outlineBeforeHistoryRef.current) setOutlineOpen(true);
   }
 
   async function saveTitle() {
@@ -336,6 +352,10 @@ export function Editor({ page, user, revisions, pages, linkTargets }: Props) {
 
   function openRevisionPreview(revision: RevisionRecord) {
     setRestoreError('');
+    if (!isDesktop) {
+      previewFromHistoryRef.current = historyOpen;
+      setHistoryOpen(false);
+    }
     setPreviewRevision(revision);
   }
 
@@ -370,7 +390,7 @@ export function Editor({ page, user, revisions, pages, linkTargets }: Props) {
       if (!response.ok) throw new Error(`delete failed: ${response.status}`);
       setDeleteOpen(false);
       setBusy(false);
-      void router.visit('/');
+      void router.visit('/trash');
     } catch {
       setDeleteError('ページをゴミ箱に移動できませんでした。もう一度お試しください。');
       setBusy(false);
@@ -378,21 +398,19 @@ export function Editor({ page, user, revisions, pages, linkTargets }: Props) {
   }
 
   const others = users.filter((item) => item.name !== user.displayName);
-  const sidePanelToggleLabel = sidePanelInfo.hasToc ? '目次' : 'バックリンク';
   const sidePanelActionLabel = sidePanelInfo.hasToc
     ? sidePanelInfo.hasBacklinks
       ? '目次とバックリンク'
       : '目次'
     : 'バックリンク';
-  const showSidePanelToggle = mode === 'read' && !historyOpen && sidePanelInfo.available;
+  const showSidePanelToggle = mode === 'read' && sidePanelInfo.available;
+  const outlineVisible = isDesktop ? sidePanelOpen && !historyOpen : outlineOpen;
 
   return (
     <div className="flex w-full flex-col gap-4">
-      <div
-        className={
-          historyOpen ? 'flex flex-col gap-3 xl:pe-[calc(280px+1rem)]' : 'flex flex-col gap-3'
-        }
-      >
+      <header className="flex flex-col gap-2 border-b border-kumo-line pb-3">
+        <PagePathBreadcrumb title={savedTitle} />
+
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
           <div className="min-w-0 sm:flex-1">
             {mode === 'edit' ? (
@@ -417,7 +435,7 @@ export function Editor({ page, user, revisions, pages, linkTargets }: Props) {
               <div className="flex h-10 items-center">
                 <h1
                   className="w-full truncate text-2xl font-semibold text-kumo-strong"
-                  title={title}
+                  title={savedTitle}
                 >
                   {titleName || '無題'}
                 </h1>
@@ -456,63 +474,60 @@ export function Editor({ page, user, revisions, pages, linkTargets }: Props) {
                 <Button
                   type="button"
                   variant="secondary"
-                  icon={sidePanelOpen ? <XIcon size={15} /> : <ListBulletsIcon size={15} />}
-                  onClick={() => setSidePanelOpen((open) => !open)}
-                  aria-pressed={sidePanelOpen}
+                  icon={outlineVisible ? <XIcon size={15} /> : <ListBulletsIcon size={15} />}
+                  onClick={toggleOutline}
+                  aria-pressed={outlineVisible}
                   aria-controls="page-side-panel"
-                  title={`${sidePanelActionLabel}を${sidePanelOpen ? '閉じる' : '開く'}`}
-                  className="hidden xl:inline-flex"
+                  title={`${sidePanelActionLabel}を${outlineVisible ? '閉じる' : '開く'}`}
                 >
-                  {sidePanelToggleLabel}
+                  {sidePanelActionLabel}
                 </Button>
               ) : null}
               <Button
                 type="button"
                 variant="secondary"
                 icon={<ClockCounterClockwiseIcon size={15} />}
-                onClick={() => setHistoryOpen((open) => !open)}
+                onClick={toggleHistory}
                 aria-pressed={historyOpen}
               >
                 履歴
               </Button>
-              <DropdownMenu>
-                <DropdownMenu.Trigger
-                  render={
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      shape="square"
-                      aria-label="ページメニュー"
+              {mode === 'read' ? (
+                <DropdownMenu>
+                  <DropdownMenu.Trigger
+                    render={
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        shape="square"
+                        aria-label="ページメニュー"
+                      >
+                        <DotsThreeIcon size={18} />
+                      </Button>
+                    }
+                  />
+                  <DropdownMenu.Content>
+                    <DropdownMenu.Item
+                      variant="danger"
+                      icon={<TrashIcon size={16} />}
+                      onClick={() => {
+                        setDeleteError('');
+                        setDeleteOpen(true);
+                      }}
+                      disabled={busy}
                     >
-                      <DotsThreeIcon size={18} />
-                    </Button>
-                  }
-                />
-                <DropdownMenu.Content>
-                  <DropdownMenu.Item
-                    variant="danger"
-                    icon={<TrashIcon size={16} />}
-                    onClick={() => {
-                      setDeleteError('');
-                      setDeleteOpen(true);
-                    }}
-                    disabled={busy}
-                  >
-                    ページを削除
-                  </DropdownMenu.Item>
-                </DropdownMenu.Content>
-              </DropdownMenu>
+                      ページを削除
+                    </DropdownMenu.Item>
+                  </DropdownMenu.Content>
+                </DropdownMenu>
+              ) : null}
             </div>
           </div>
         </div>
-      </div>
+      </header>
 
       {error ? (
-        <div
-          className={historyOpen ? 'xl:pe-[calc(280px+1rem)]' : undefined}
-          role="alert"
-          aria-live="polite"
-        >
+        <div role="alert" aria-live="polite">
           <Text variant="error" size="sm">
             {error}
           </Text>
@@ -562,6 +577,10 @@ export function Editor({ page, user, revisions, pages, linkTargets }: Props) {
                   pageTitle={savedTitle}
                   sidePanel={!historyOpen}
                   sidePanelOpen={sidePanelOpen}
+                  mobilePanelOpen={outlineOpen && !isDesktop}
+                  onMobilePanelOpenChange={(open) => {
+                    if (!open) setOutlineOpen(false);
+                  }}
                   onSidePanelInfoChange={handleSidePanelInfoChange}
                 />
               </Suspense>
@@ -586,83 +605,36 @@ export function Editor({ page, user, revisions, pages, linkTargets }: Props) {
         )}
 
         {historyOpen ? (
-          <div ref={historyRef} className="scroll-mt-20 self-start xl:sticky xl:top-20">
+          <div className="hidden self-start xl:sticky xl:top-20 xl:block">
             <LayerCard className="overflow-hidden p-0">
               <div className="xl:max-h-[calc(100vh-6rem)] xl:overflow-y-auto">
-                <div className="flex items-center justify-between px-3 pt-2">
-                  <div className="flex items-center gap-2">
-                    <Text variant="heading" as="h2">
-                      履歴
-                    </Text>
-                    <Badge variant="outline">{revisions.length}</Badge>
-                  </div>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    shape="square"
-                    aria-label="履歴を閉じる"
-                    onClick={() => setHistoryOpen(false)}
-                  >
-                    <XIcon size={16} />
-                  </Button>
-                </div>
-
-                <div className="border-b border-kumo-line p-3">
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    icon={<FloppyDiskIcon size={15} />}
-                    onClick={saveRevision}
-                    disabled={busy || restoreBusy}
-                    title="現在の版を保存（⌘S / Ctrl+S）"
-                    aria-keyshortcuts="Meta+S Control+S"
-                    className="w-full"
-                  >
-                    現在の版を保存
-                  </Button>
-                </div>
-
-                {revisions.length === 0 ? (
-                  <Empty
-                    size="sm"
-                    className="border-0 bg-transparent"
-                    icon={<ClockCounterClockwiseIcon size={28} />}
-                    title="履歴はまだありません"
-                    description="編集内容は自動で保存されます。"
-                  />
-                ) : (
-                  <ul className="divide-y divide-kumo-line">
-                    {revisions.map((revision) => (
-                      <li
-                        className="flex items-start justify-between gap-2 px-3 py-2"
-                        key={revision.id}
-                      >
-                        <div className="flex min-w-0 flex-col gap-0.5">
-                          <div className="flex items-center gap-1.5">
-                            <Text variant="mono">v{revision.version}</Text>
-                            {revision.manual ? <Badge variant="outline">手動</Badge> : null}
-                          </div>
-                          <Text variant="mono-secondary">{formatDate(revision.createdAt)}</Text>
-                        </div>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          icon={<ArrowCounterClockwiseIcon size={15} />}
-                          onClick={() => openRevisionPreview(revision)}
-                          disabled={busy || restoreBusy}
-                          aria-label={`v${revision.version} の内容を確認して戻す`}
-                        >
-                          戻す
-                        </Button>
-                      </li>
-                    ))}
-                  </ul>
-                )}
+                <HistoryPanel
+                  revisions={revisions}
+                  busy={busy}
+                  restoreBusy={restoreBusy}
+                  onSave={() => void saveRevision()}
+                  onClose={toggleHistory}
+                  onPreview={openRevisionPreview}
+                />
               </div>
             </LayerCard>
           </div>
         ) : null}
       </div>
+
+      {!isDesktop ? (
+        <MobileSheet open={historyOpen} onOpenChange={toggleHistory} title="履歴">
+          <HistoryPanel
+            revisions={revisions}
+            busy={busy}
+            restoreBusy={restoreBusy}
+            showHeader={false}
+            onSave={() => void saveRevision()}
+            onClose={toggleHistory}
+            onPreview={openRevisionPreview}
+          />
+        </MobileSheet>
+      ) : null}
 
       <LayerDialog.Root
         open={deleteOpen}
@@ -674,7 +646,7 @@ export function Editor({ page, user, revisions, pages, linkTargets }: Props) {
         dismissDisabled={busy}
       >
         <LayerDialog.Content size="sm" verticalAlign="center" closeLabel="閉じる">
-          <LayerDialog.Title>「{title || '無題'}」を削除しますか？</LayerDialog.Title>
+          <LayerDialog.Title>「{savedTitle || '無題'}」を削除しますか？</LayerDialog.Title>
           <LayerDialog.Description>
             ページはゴミ箱に移動します。必要な場合はゴミ箱から復元できます。
           </LayerDialog.Description>
@@ -706,11 +678,125 @@ export function Editor({ page, user, revisions, pages, linkTargets }: Props) {
           if (open || restoreBusy) return;
           setPreviewRevision(null);
           setRestoreError('');
+          if (!isDesktop && previewFromHistoryRef.current) {
+            previewFromHistoryRef.current = false;
+            setHistoryOpen(true);
+          }
         }}
         onConfirm={() => void restoreRevision()}
       />
     </div>
   );
+}
+
+function HistoryPanel({
+  revisions,
+  busy,
+  restoreBusy,
+  showHeader = true,
+  onSave,
+  onClose,
+  onPreview,
+}: {
+  revisions: RevisionRecord[];
+  busy: boolean;
+  restoreBusy: boolean;
+  showHeader?: boolean;
+  onSave: () => void;
+  onClose: () => void;
+  onPreview: (revision: RevisionRecord) => void;
+}) {
+  return (
+    <div className="flex flex-col">
+      {showHeader ? (
+        <div className="flex items-center justify-between px-3 pt-2">
+          <div className="flex items-center gap-2">
+            <Text variant="heading" as="h2">
+              履歴
+            </Text>
+            <Badge variant="outline">{revisions.length}</Badge>
+          </div>
+          <Button
+            type="button"
+            variant="ghost"
+            shape="square"
+            aria-label="履歴を閉じる"
+            onClick={onClose}
+          >
+            <XIcon size={16} />
+          </Button>
+        </div>
+      ) : null}
+
+      <div className="border-b border-kumo-line p-3">
+        <Button
+          type="button"
+          variant="secondary"
+          icon={<FloppyDiskIcon size={15} />}
+          onClick={onSave}
+          disabled={busy || restoreBusy}
+          title="現在の版を保存（⌘S / Ctrl+S）"
+          aria-keyshortcuts="Meta+S Control+S"
+          className="w-full"
+        >
+          現在の版を保存
+        </Button>
+      </div>
+
+      {revisions.length === 0 ? (
+        <Empty
+          size="sm"
+          className="border-0 bg-transparent"
+          icon={<ClockCounterClockwiseIcon size={28} />}
+          title="履歴はまだありません"
+          description="編集内容は自動で保存されます。"
+        />
+      ) : (
+        <ul className="divide-y divide-kumo-line">
+          {revisions.map((revision) => (
+            <li className="flex items-start justify-between gap-2 px-3 py-2" key={revision.id}>
+              <div className="flex min-w-0 flex-col gap-0.5">
+                <div className="flex items-center gap-1.5">
+                  <Text variant="mono">v{revision.version}</Text>
+                  <Badge variant={revision.manual ? 'info' : 'outline'}>
+                    {revision.manual ? '手動' : '自動'}
+                  </Badge>
+                </div>
+                <Text variant="mono-secondary">{formatDate(revision.createdAt)}</Text>
+                <Text variant="secondary" size="sm">
+                  作成者: {revision.authorName || '不明なユーザー'}
+                </Text>
+              </div>
+              <Button
+                type="button"
+                variant="ghost"
+                icon={<EyeIcon size={15} />}
+                onClick={() => onPreview(revision)}
+                disabled={busy || restoreBusy}
+                aria-label={`v${revision.version} の差分を見る`}
+              >
+                差分を見る
+              </Button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function useMediaQuery(query: string): boolean {
+  const [matches, setMatches] = useState(false);
+
+  useEffect(() => {
+    const list = window.matchMedia(query);
+    const update = () => setMatches(list.matches);
+    update();
+    list.addEventListener('change', update);
+    return () => list.removeEventListener('change', update);
+  }, [query]);
+
+  return matches;
 }
 
 type SaveStatusDisplay = {
