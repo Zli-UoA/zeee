@@ -2,7 +2,7 @@
 
 状態: 設計のみ（実装前）。Base は `origin/main` の `f048ddf`。`0001_scale` はマージ済みで、この設計はその後ろに `0002_path_uniqueness.sql` を置く。
 
-このドキュメントは、PR #20 で一度決めた `parent_id` 方式を置き換え、ページタイトルを `/` 区切りのパスとして扱う方式の contract を定める。コード変更、schema 変更、PR 分割の単位は末尾にまとめる。
+このドキュメントは、PR #20 で一度決めた `parent_id` 方式を置き換え、ページタイトルを `/` 区切りのパスとして扱う方式の contract を定める。コード変更、schema 変更、PR 分割の単位は末尾にまとめる。なお、`title` は DB 列名としての実装名であり、UI / IA では「パス」と呼ぶ。
 
 ## 0. 決定事項
 
@@ -404,11 +404,12 @@ type PageTreeScope = { kind: 'all' } | { kind: 'directory'; path: string };
 
 ### 6.2 PageTree と scope
 
+- この節は PageTree component の contract。IA v1 では「すべてのページ」と Directory の本文は一覧ビューとし、PageTree はサイドバーと子ディレクトリ導線に使う。
 - クライアントの純粋関数 `buildPageTree(pages)` が、`PageNavigation[]` のフルパスを `/` で分割してディレクトリノードを合成する。
 - 同じ階層の兄弟は表示名（最後のセグメント）で決定的に並べる。`Intl.Collator('ja', { numeric: true, sensitivity: 'base' })` を使い、同値なら `path`、`updatedAt`、`id` で tie-break する。ページとディレクトリは同名共存できないため、表示名の重複は起きない。
 - `scope: { kind: 'all' }` は root のページとディレクトリを表示する。
 - `scope: { kind: 'directory', path: 'a/b' }` は `a/b` 配下の subtree を表示する。ディレクトリ自身はヘッダー / パンくずに出し、子として繰り返さない。
-- どちらの scope も同じ `PageTree` コンポーネントを使う。「すべてのページ」は `kind: 'all'`、ディレクトリリンクは `kind: 'directory'`。
+- PageTree はサイドバーと、Directory 本文の子ディレクトリ導線に使う。IA v1 では「すべてのページ」と Directory の本文は一覧を基本とし、本文にツリーを二重に表示しない。
 - ディレクトリは配下に active page がある間だけ存在する。空ディレクトリは MVP 外なので、存在しないディレクトリへのリンクは 404 にする（後述）。
 - 深いパスでも表示が壊れないように、折りたたみとインデントで対応する。ページは葉なので、ページノードに展開ボタンは付けない。
 - サイドバーの「すべてのページ」も同じ `buildPageTree` を使う。ページ詳細では active page を `aria-current="page"` で示す。
@@ -418,7 +419,7 @@ type PageTreeScope = { kind: 'all' } | { kind: 'directory'; path: string };
 ### 6.3 作成・rename の UI
 
 - 作成ダイアログと rename は、どちらも 1 つのパス入力だけを出す。「ページ作成 / ディレクトリ作成」のモード切替はない。
-- 入力値はフルパス。例: `a/b/c`。`a/b/` のような末尾 `/` はエラーにする。
+- 入力中はディレクトリ prefix（例: `a/b/`）を許す。保存時は最後のセグメントを含む完全なフルパス（例: `a/b/c`）を要求し、末尾 `/` は 400 にする。
 - ディレクトリ autocomplete は、既存の `PageNavigation[]` から `deriveDirectories(pages)` で全ディレクトリパスを導出して出す。候補を選ぶと `a/b/` まで入力し、最後のセグメントをユーザーが入力する。専用の directory API は作らない。
 - 新しいディレクトリ名を直接入力して保存すると、その配下のページ作成と同時にディレクトリが生まれる。空ディレクトリだけを作る操作は提供しない。
 - rename はページのパス編集として扱う。ページは葉なので、配下ページの一括更新は起きない。ディレクトリノードには rename 操作を出さない。
