@@ -76,3 +76,18 @@ it('renders gemoji Unicode after custom resolution and preserves code and links'
   expect(emojiCompletion(':+', 2, emojis, shortcodes)?.options[0].apply).toBe(':+1:');
   expect(emojiCompletion('`:+`', 3, emojis, shortcodes)).toBeNull();
 });
+
+it('leaves reference link labels unchanged', () => {
+  const tree: WikiNode = {
+    type: 'root',
+    children: [
+      {
+        type: 'linkReference',
+        identifier: 'target',
+        children: [{ type: 'text', value: ':cat: :+1:' }],
+      },
+    ],
+  };
+  remarkEmojis({ emojis, shortcodes: { '+1': '👍' } })(tree);
+  expect(tree.children![0].children![0].value).toBe(':cat: :+1:');
+});

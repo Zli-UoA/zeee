@@ -13,7 +13,18 @@ export function remarkEmojis({
     for (const name of [emoji.name, ...emoji.aliases]) names.set(name, emoji);
   return (tree: WikiNode) => {
     function walk(node: WikiNode) {
-      if (['code', 'inlineCode', 'link', 'image', 'html', 'definition'].includes(node.type ?? ''))
+      if (
+        [
+          'code',
+          'inlineCode',
+          'link',
+          'linkReference',
+          'image',
+          'imageReference',
+          'html',
+          'definition',
+        ].includes(node.type ?? '')
+      )
         return;
       node.children = node.children?.flatMap((child) => {
         if (child.type !== 'text' || typeof child.value !== 'string') {
