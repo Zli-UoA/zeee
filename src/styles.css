@@ -407,3 +407,13 @@ body {
 .zeee-prose .hljs-strong {
   font-weight: 600;
 }
+
+.zeee-prose img.zeee-custom-emoji {
+  display: inline-block;
+  height: 1.4em;
+  width: auto;
+  max-width: 4em;
+  margin: 0 0.1em;
+  vertical-align: -0.25em;
+  object-fit: contain;
+}

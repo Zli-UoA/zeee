@@ -1,3 +1,5 @@
+import { useEmojis } from '../emoji/useEmojis';
+import { emojiCompletion } from '../emoji/markdown';
 import { useEffect, useId, useRef } from 'react';
 import type * as Y from 'yjs';
 import type { Awareness } from 'y-protocols/awareness';
@@ -63,6 +65,11 @@ const editorTheme = EditorView.theme({
 });
 
 export default function CodeEditor({ text, awareness, undoManager, targets, className }: Props) {
+  const { emojis, shortcodes } = useEmojis();
+  const shortcodesRef = useRef(shortcodes);
+  shortcodesRef.current = shortcodes;
+  const emojisRef = useRef(emojis);
+  emojisRef.current = emojis;
   const containerRef = useRef<HTMLDivElement>(null);
   const helpId = useId();
 
@@ -75,7 +82,18 @@ export default function CodeEditor({ text, awareness, undoManager, targets, clas
         Prec.high(keymap.of(yUndoManagerKeymap)),
         Prec.high(keymap.of(markdownEditingKeymap)),
         markdownLanguage(),
-        autocompletion({ override: [wikiCompletionSource(targets)] }),
+        autocompletion({
+          override: [
+            wikiCompletionSource(targets),
+            (context) =>
+              emojiCompletion(
+                context.state.doc.toString(),
+                context.pos,
+                emojisRef.current,
+                shortcodesRef.current,
+              ),
+          ],
+        }),
         EditorView.lineWrapping,
         EditorView.contentAttributes.of({
           'aria-label': '本文',

@@ -19,6 +19,7 @@ export default defineConfig({
       AUTHZ_ISSUER: 'https://account.zli.works/api/auth',
       AUTHZ_CLIENT_ID: 'ocfGoISXBgnRMqogOLEdYsZUXusTBczV',
       PUBLIC_ORIGIN: 'https://zeee.zli.works',
+      EMOJI_SERVICE_URL: process.env.EMOJI_SERVICE_URL ?? '',
     },
     d1_databases: [
       {
