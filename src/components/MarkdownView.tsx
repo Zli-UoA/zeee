@@ -74,7 +74,7 @@ export function MarkdownView({
   onMobilePanelOpenChange,
   onSidePanelInfoChange,
 }: Props) {
-  const { emojis } = useEmojis();
+  const { emojis, shortcodes } = useEmojis();
   const articleRef = useRef<HTMLElement>(null);
   const [toc, setToc] = useState<TocItem[]>([]);
   const [backlinks, setBacklinks] = useState<Backlink[] | null>(null);
@@ -251,7 +251,7 @@ export function MarkdownView({
               remarkPlugins={[
                 remarkGfm,
                 [remarkWikiLinks, { resolve }],
-                [remarkEmojis, { emojis }],
+                [remarkEmojis, { emojis, shortcodes }],
               ]}
               rehypePlugins={[
                 [rehypeSanitize, sanitizeSchema],

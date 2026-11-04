@@ -1,7 +1,11 @@
 import { useEffect, useState } from 'react';
 import type { CustomEmoji } from './client';
-type Catalog = { emojis: CustomEmoji[]; management_url: string | null };
-let value: Catalog = { emojis: [], management_url: null };
+type Catalog = {
+  shortcodes: Record<string, string>;
+  emojis: CustomEmoji[];
+  management_url: string | null;
+};
+let value: Catalog = { shortcodes: {}, emojis: [], management_url: null };
 let fetched = 0;
 let pending: Promise<Catalog> | undefined;
 async function load() {

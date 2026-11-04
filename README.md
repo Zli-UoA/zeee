@@ -109,3 +109,5 @@ Cloudflare → Traefik → celld (Worker + PageRoom Durable Object)
 本番では GitHub Environment `production` の変数 `EMOJI_SERVICE_URL`、ローカルでは `.dev.vars` の `EMOJI_SERVICE_URL` に Zli-UoA/emoji の公開オリジン（末尾スラッシュなし）を設定すると、Markdownの `:名前:` 表示とCodeMirrorの名前・エイリアス補完が有効になる。ヘッダーの「絵文字」からサービスの管理画面を開く。OIDCのscope・resource・token保存は変更しない。
 
 一覧はサーバーで60秒キャッシュし、ETagで再検証する。取得失敗時は最終成功一覧を保持する。未設定時は無効。インラインコード・コードブロック・リンク内は変換せず、未知の名前はテキストで表示する。
+
+標準ショートコードも同じサービスのgemoji辞書を利用する。Markdownの通常テキスト内で `:+1:` などをUnicodeへ変換し、CodeMirrorの `:` 補完へ名前を追加する。同名のカスタム名・別名はカスタム画像を優先する。辞書はサーバーで1時間キャッシュ・ETag再検証し、障害時には最終成功辞書を使う。初回取得に失敗した場合は標準ショートコードを元の文字列で表示する。

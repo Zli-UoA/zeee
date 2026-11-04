@@ -41,3 +41,38 @@ describe('shared custom emoji', () => {
     expect(emojiCompletion(':ne:', 3, emojis)?.to).toBe(4);
   });
 });
+
+it('renders gemoji Unicode after custom resolution and preserves code and links', () => {
+  const tree: WikiNode = {
+    type: 'root',
+    children: [
+      {
+        type: 'paragraph',
+        children: [{ type: 'text', value: ':cat: :+1: :woman_technologist: :unknown:' }],
+      },
+      { type: 'inlineCode', value: ':+1:' },
+      {
+        type: 'link',
+        url: 'https://example.test/:+1:',
+        children: [{ type: 'text', value: ':+1:' }],
+      },
+    ],
+  };
+  const shortcodes = { cat: '🐈', '+1': '👍', woman_technologist: '👩‍💻' };
+  remarkEmojis({ emojis, shortcodes })(tree);
+  const nodes = tree.children![0].children!;
+  expect(nodes.find((n) => n.type === 'image')?.url).toBe(emojis[0].image_url);
+  expect(
+    nodes
+      .filter((n) => n.type === 'text')
+      .map((n) => n.value)
+      .join(''),
+  ).toBe(' 👍 👩‍💻 :unknown:');
+  expect(tree.children![1].value).toBe(':+1:');
+  expect(tree.children![2].children![0].value).toBe(':+1:');
+  expect(
+    emojiCompletion(':cat', 4, emojis, shortcodes)?.options.filter((e) => e.label === ':cat:'),
+  ).toHaveLength(1);
+  expect(emojiCompletion(':+', 2, emojis, shortcodes)?.options[0].apply).toBe(':+1:');
+  expect(emojiCompletion('`:+`', 3, emojis, shortcodes)).toBeNull();
+});

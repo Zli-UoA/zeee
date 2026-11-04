@@ -65,7 +65,9 @@ const editorTheme = EditorView.theme({
 });
 
 export default function CodeEditor({ text, awareness, undoManager, targets, className }: Props) {
-  const { emojis } = useEmojis();
+  const { emojis, shortcodes } = useEmojis();
+  const shortcodesRef = useRef(shortcodes);
+  shortcodesRef.current = shortcodes;
   const emojisRef = useRef(emojis);
   emojisRef.current = emojis;
   const containerRef = useRef<HTMLDivElement>(null);
@@ -84,7 +86,12 @@ export default function CodeEditor({ text, awareness, undoManager, targets, clas
           override: [
             wikiCompletionSource(targets),
             (context) =>
-              emojiCompletion(context.state.doc.toString(), context.pos, emojisRef.current),
+              emojiCompletion(
+                context.state.doc.toString(),
+                context.pos,
+                emojisRef.current,
+                shortcodesRef.current,
+              ),
           ],
         }),
         EditorView.lineWrapping,
