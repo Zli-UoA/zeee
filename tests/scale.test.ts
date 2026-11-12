@@ -10,6 +10,7 @@ import {
   createRevision,
   createSession,
   getPage,
+  getUserBySession,
   listDeletedPages,
   listLinkTargets,
   listPageNavigation,
@@ -376,5 +377,24 @@ describe('last editor and additive migration', () => {
     const b = await fixture(2);
     expect((await listPages(a.db)).items).toHaveLength(1);
     expect((await listPages(b.db)).items).toHaveLength(2);
+  });
+});
+
+describe('R2 write reductions', () => {
+  it('keeps session lookups read-only', async () => {
+    const { db, sqlite } = await fixture();
+    const token = await createSession(db, 'creator');
+    sqlite.prepare('UPDATE session SET last_seen_at = 123').run();
+    expect(await getUserBySession(db, token)).toMatchObject({ id: 'creator' });
+    expect(sqlite.prepare('SELECT last_seen_at FROM session').get()?.last_seen_at).toBe(123);
+  });
+
+  it('can materialize a page body without rebuilding its search entry', async () => {
+    const { db } = await fixture();
+    const page = await createPage(db, 'Search cadence', 'creator');
+    await materializePage(db, page.id, 'unique-search-token', 'editor', false);
+    expect((await searchPages(db, 'unique-search-token')).items).toHaveLength(0);
+    await materializePage(db, page.id, 'unique-search-token', 'editor', true);
+    expect((await searchPages(db, 'unique-search-token')).items).toHaveLength(1);
   });
 });

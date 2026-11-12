@@ -11,7 +11,9 @@ type ClientMessage =
   | { type: 'update'; update: string; actor?: string; clientSeq?: number }
   | { type: 'awareness'; update: string };
 
-const TEN_MINUTES = 10 * 60 * 1000;
+const MATERIALIZE_DEBOUNCE_MS = 10_000;
+const SEARCH_INTERVAL_MS = 60_000;
+const REVISION_INTERVAL_MS = 30 * 60 * 1000;
 const FIVE_MINUTES = 5 * 60 * 1000;
 const SNAPSHOT_UPDATES = 300;
 
@@ -22,6 +24,7 @@ export class PageRoomObject extends DurableObject<Env> {
   private pageId: string;
   private lastActorId: string | null = null;
   private lastSnapshotAt = 0;
+  private lastSearchAt = 0;
   private alarmScheduled = false;
 
   constructor(ctx: DurableObjectState, env: Env) {
@@ -156,7 +159,6 @@ export class PageRoomObject extends DurableObject<Env> {
         const actor = typeof attachment?.userId === 'string' ? attachment.userId : null;
         this.saveUpdate(update, actor);
         Y.applyUpdate(this.doc, update, 'remote');
-        this.lastActorId = actor;
         this.broadcast({ type: 'update', update: parsed.update }, socket);
       }
       if (clientSeq !== undefined) this.reply(socket, { type: 'ack', clientSeq });
@@ -172,13 +174,18 @@ export class PageRoomObject extends DurableObject<Env> {
       actorId,
       Date.now(),
     );
-    this.ctx.storage.sql.exec(
-      'INSERT INTO doc_actor (id, actor_id) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET actor_id = excluded.actor_id',
-      actorId,
-    );
+    // The actor changes far less often than the document. Keep the row for
+    // restarts, but do not add a second commit to every keystroke.
+    if (this.lastActorId !== actorId) {
+      this.ctx.storage.sql.exec(
+        'INSERT INTO doc_actor (id, actor_id) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET actor_id = excluded.actor_id',
+        actorId,
+      );
+      this.lastActorId = actorId;
+    }
     if (!this.alarmScheduled) {
       this.alarmScheduled = true;
-      void this.ctx.storage.setAlarm(Date.now() + 1000);
+      void this.ctx.storage.setAlarm(Date.now() + MATERIALIZE_DEBOUNCE_MS);
     }
   }
 
@@ -208,11 +215,16 @@ export class PageRoomObject extends DurableObject<Env> {
     if (!this.pageId) return;
 
     const markdown = this.text.toJSON();
-    await materializePage(this.env.DB, this.pageId, markdown, this.lastActorId);
-
     const now = Date.now();
+    const updateSearch = now - this.lastSearchAt >= SEARCH_INTERVAL_MS;
+    await materializePage(this.env.DB, this.pageId, markdown, this.lastActorId, updateSearch);
+    if (updateSearch) this.lastSearchAt = now;
+
     const latest = await latestRevision(this.env.DB, this.pageId);
-    if (!latest || (now - latest.createdAt >= TEN_MINUTES && latest.markdown !== markdown)) {
+    if (
+      !latest ||
+      (now - latest.createdAt >= REVISION_INTERVAL_MS && latest.markdown !== markdown)
+    ) {
       await createRevision(this.env.DB, this.pageId, markdown, this.lastActorId, false);
     }
 
@@ -239,6 +251,7 @@ export class PageRoomObject extends DurableObject<Env> {
   private async snapshot(userId: string): Promise<Response> {
     const markdown = this.text.toJSON();
     await materializePage(this.env.DB, this.pageId, markdown, this.lastActorId);
+    this.lastSearchAt = Date.now();
     const version = await createRevision(this.env.DB, this.pageId, markdown, userId, true);
     return Response.json({ version, markdown });
   }
@@ -265,10 +278,10 @@ export class PageRoomObject extends DurableObject<Env> {
     }
     this.saveUpdate(update, userId);
     Y.applyUpdate(this.doc, update, 'remote');
-    this.lastActorId = userId;
     this.broadcast({ type: 'update', update: encodeBase64(update) });
 
     await materializePage(this.env.DB, this.pageId, this.text.toJSON(), userId);
+    this.lastSearchAt = Date.now();
     const version = await createRevision(
       this.env.DB,
       this.pageId,
