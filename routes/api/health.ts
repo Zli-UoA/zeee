@@ -3,6 +3,12 @@ import { ensureSchema } from '../../src/server/schema';
 import type { Env } from '../../src/server/types';
 
 export const GET = defineHandler(async (c) => {
+  // The production probe is intentionally dependency-free. `ensureSchema` +
+  // `SELECT 1` activates the D1 cell, and on celld every activation can write
+  // a whole-database image to R2. Use `?deep=1` only from an operator/manual
+  // check when the database itself must be verified.
+  if (c.req.query('deep') !== '1') return { ok: true };
+
   const env = c.env as Env;
   try {
     await ensureSchema(env.DB);

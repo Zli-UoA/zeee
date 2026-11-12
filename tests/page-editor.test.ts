@@ -91,6 +91,7 @@ describe('authenticated last editor in PageRoom', () => {
       'page-1',
       'Edited text',
       'authenticated-editor',
+      true,
     );
     const restarted = new RoomClass(ctx, env);
     await restarted.alarm();
@@ -99,6 +100,30 @@ describe('authenticated last editor in PageRoom', () => {
       'page-1',
       'Edited text',
       'authenticated-editor',
+      true,
+    );
+  });
+
+  it('throttles search index rebuilds while still materializing the body', async () => {
+    const { room, env } = roomStore();
+    await edit(room, 'editor');
+    await room.alarm();
+    expect(writes.materialize).toHaveBeenLastCalledWith(
+      env.DB,
+      'page-1',
+      expect.any(String),
+      'editor',
+      true,
+    );
+
+    await edit(room, 'editor');
+    await room.alarm();
+    expect(writes.materialize).toHaveBeenLastCalledWith(
+      env.DB,
+      'page-1',
+      expect.any(String),
+      'editor',
+      false,
     );
   });
 
@@ -106,7 +131,13 @@ describe('authenticated last editor in PageRoom', () => {
     const { room, env } = roomStore();
     await edit(room);
     await room.alarm();
-    expect(writes.materialize).toHaveBeenLastCalledWith(env.DB, 'page-1', 'Edited text', null);
+    expect(writes.materialize).toHaveBeenLastCalledWith(
+      env.DB,
+      'page-1',
+      'Edited text',
+      null,
+      true,
+    );
   });
 
   it('keeps the content author when someone else saves a manual snapshot', async () => {

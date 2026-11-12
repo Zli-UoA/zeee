@@ -179,7 +179,9 @@ export async function getUserBySession(db: D1Database, token: string): Promise<S
     await db.prepare('DELETE FROM session WHERE id = ?').bind(id).run();
     return null;
   }
-  await db.prepare('UPDATE session SET last_seen_at = ? WHERE id = ?').bind(timestamp, id).run();
+  // `last_seen_at` is not read anywhere. Updating it on every authenticated
+  // request turns read-only page views into D1 writes (and, on celld, R2
+  // LTX writes), so the session lookup stays read-only.
   return {
     id: row.id,
     username: row.username,
@@ -659,6 +661,7 @@ export async function materializePage(
   pageId: string,
   markdown: string,
   actorId: string | null = null,
+  updateSearch = true,
 ): Promise<string> {
   await ensureSchema(db);
   const timestamp = Date.now();
@@ -667,7 +670,7 @@ export async function materializePage(
     .bind(pageId)
     .first<{ title: string }>();
   const title = page?.title ?? 'Untitled';
-  await db.batch([
+  const statements: D1PreparedStatement[] = [
     editorStatement(db, pageId, actorId, timestamp, markdown),
     db
       .prepare(
@@ -676,11 +679,19 @@ export async function materializePage(
       )
       .bind(pageId, markdown, timestamp),
     db.prepare('UPDATE page SET updated_at = ? WHERE id = ?').bind(timestamp, pageId),
-    db.prepare('DELETE FROM page_fts WHERE page_id = ?').bind(pageId),
-    db
-      .prepare('INSERT INTO page_fts (page_id, title, body) VALUES (?, ?, ?)')
-      .bind(pageId, title, markdown),
-  ]);
+  ];
+  if (updateSearch) {
+    // Trigrams make a full reindex of a page expensive. The DO calls this
+    // with updateSearch=false for routine body saves and rebuilds the search
+    // entry on a slower cadence.
+    statements.push(
+      db.prepare('DELETE FROM page_fts WHERE page_id = ?').bind(pageId),
+      db
+        .prepare('INSERT INTO page_fts (page_id, title, body) VALUES (?, ?, ?)')
+        .bind(pageId, title, markdown),
+    );
+  }
+  await db.batch(statements);
   return title;
 }
 
