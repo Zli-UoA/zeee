@@ -15,7 +15,7 @@ export type WikiNode = {
   type?: string;
   value?: string;
   url?: string;
-  data?: { hProperties?: Record<string, unknown> };
+  data?: { hName?: string; hProperties?: Record<string, unknown> };
   children?: WikiNode[];
   [key: string]: unknown;
 };

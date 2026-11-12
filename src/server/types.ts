@@ -3,6 +3,8 @@ export type Env = {
   ZEEE_DEV_AUTH?: string;
   AUTHZ_ISSUER?: string;
   AUTHZ_CLIENT_ID?: string;
+  EMOJI_SERVICE_URL?: string;
+  EMOJI_ACCOUNT_PROFILE_URL?: string;
   PUBLIC_ORIGIN?: string;
 };
 

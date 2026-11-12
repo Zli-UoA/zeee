@@ -1,3 +1,6 @@
+import { useEmojis } from '../emoji/useEmojis';
+import { remarkEmojis } from '../emoji/markdown';
+import { AccountGlyph } from '../emoji/AccountGlyph';
 import {
   createElement,
   isValidElement,
@@ -57,6 +60,7 @@ const sanitizeSchema = {
   attributes: {
     ...defaultSchema.attributes,
     a: [...(defaultSchema.attributes?.a ?? []), 'data*' as const],
+    span: [...(defaultSchema.attributes?.span ?? []), 'dataAuthzAccount', 'dataAccountIcon'],
   },
 };
 
@@ -72,6 +76,7 @@ export function MarkdownView({
   onMobilePanelOpenChange,
   onSidePanelInfoChange,
 }: Props) {
+  const { emojis, shortcodes, accounts } = useEmojis();
   const articleRef = useRef<HTMLElement>(null);
   const [toc, setToc] = useState<TocItem[]>([]);
   const [backlinks, setBacklinks] = useState<Backlink[] | null>(null);
@@ -126,6 +131,28 @@ export function MarkdownView({
 
   const components = useMemo<Components>(
     () => ({
+      span({ node, children }) {
+        const name = node?.properties?.dataAuthzAccount;
+        const account = accounts.find((item) => item.username === name);
+        return account ? (
+          <AccountGlyph account={account} iconOnly={node?.properties?.dataAccountIcon === 'true'} />
+        ) : (
+          <span>{children}</span>
+        );
+      },
+      img({ src, alt }) {
+        const custom = emojis.find((e) => e.image_url === src);
+        return (
+          <img
+            src={src}
+            alt={alt ?? ''}
+            loading="lazy"
+            width={custom?.width ?? undefined}
+            height={custom?.height ?? undefined}
+            className={custom ? 'zeee-custom-emoji' : undefined}
+          />
+        );
+      },
       a({ node, href, children }) {
         const state = node?.properties?.dataWikiState;
         const wikiTitle = node?.properties?.dataWikiTitle;
@@ -178,7 +205,7 @@ export function MarkdownView({
         return <Heading level={6} {...props} />;
       },
     }),
-    [pages],
+    [pages, emojis, accounts],
   );
 
   const hasToc = toc.length > 0;
@@ -232,7 +259,11 @@ export function MarkdownView({
             ref={articleRef}
           >
             <ReactMarkdown
-              remarkPlugins={[remarkGfm, [remarkWikiLinks, { resolve }]]}
+              remarkPlugins={[
+                remarkGfm,
+                [remarkWikiLinks, { resolve }],
+                [remarkEmojis, { emojis, shortcodes, accounts }],
+              ]}
               rehypePlugins={[
                 [rehypeSanitize, sanitizeSchema],
                 rehypeHeadings,
