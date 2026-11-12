@@ -1,11 +1,13 @@
 import { useEffect, useState } from 'react';
 import type { CustomEmoji } from './client';
+import type { AccountProfile } from './accountsClient';
 type Catalog = {
   shortcodes: Record<string, string>;
   emojis: CustomEmoji[];
   management_url: string | null;
+  accounts: AccountProfile[];
 };
-let value: Catalog = { shortcodes: {}, emojis: [], management_url: null };
+let value: Catalog = { shortcodes: {}, emojis: [], accounts: [], management_url: null };
 let fetched = 0;
 let pending: Promise<Catalog> | undefined;
 async function load() {
@@ -14,9 +16,11 @@ async function load() {
     try {
       const response = await fetch('/api/emojis');
       if (!response.ok) throw Error('unavailable');
-      value = (await response.json()) as Catalog;
+      const result = (await response.json()) as Catalog;
+      value = { ...result, accounts: Array.isArray(result.accounts) ? result.accounts : [] };
       fetched = Date.now();
     } catch {
+      value = { ...value, accounts: [] };
       /* Preserve the last successfully fetched catalog. */
     }
     return value;

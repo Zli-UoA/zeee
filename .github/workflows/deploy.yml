@@ -32,6 +32,7 @@ jobs:
       CELLD_BUCKET: ${{ vars.CELLD_BUCKET || 's3://zeee-fleet' }}
       S3_ENDPOINT: ${{ vars.S3_ENDPOINT || 'https://c9918f2caa050736a07867e6f968c0a2.r2.cloudflarestorage.com' }}
       EMOJI_SERVICE_URL: ${{ vars.EMOJI_SERVICE_URL }}
+      EMOJI_ACCOUNT_PROFILE_URL: ${{ vars.EMOJI_ACCOUNT_PROFILE_URL }}
       AWS_REGION: ${{ vars.AWS_REGION || 'auto' }}
     steps:
       - name: Checkout

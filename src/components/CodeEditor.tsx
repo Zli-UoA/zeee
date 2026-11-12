@@ -65,7 +65,9 @@ const editorTheme = EditorView.theme({
 });
 
 export default function CodeEditor({ text, awareness, undoManager, targets, className }: Props) {
-  const { emojis, shortcodes } = useEmojis();
+  const { emojis, shortcodes, accounts } = useEmojis();
+  const accountsRef = useRef(accounts);
+  accountsRef.current = accounts;
   const shortcodesRef = useRef(shortcodes);
   shortcodesRef.current = shortcodes;
   const emojisRef = useRef(emojis);
@@ -91,6 +93,7 @@ export default function CodeEditor({ text, awareness, undoManager, targets, clas
                 context.pos,
                 emojisRef.current,
                 shortcodesRef.current,
+                accountsRef.current,
               ),
           ],
         }),

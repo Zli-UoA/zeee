@@ -4,12 +4,14 @@ import { jsonError } from '../../src/server/http';
 import type { Env } from '../../src/server/types';
 import { ShortcodeClient } from '../../src/emoji/shortcodesClient';
 import { EmojiClient } from '../../src/emoji/client';
+import { AccountClient } from '../../src/emoji/accountsClient';
+const accountsClients = new Map<string, AccountClient>();
 const clients = new Map<string, EmojiClient>();
 const shortcodeClients = new Map<string, ShortcodeClient>();
 export const GET = defineHandler(async (c) => {
   if (!(await getSessionUser(c))) return jsonError(c, 401, 'login required');
   const service = (c.env as Env).EMOJI_SERVICE_URL;
-  if (!service) return { emojis: [], shortcodes: {}, management_url: null };
+  if (!service) return { emojis: [], shortcodes: {}, accounts: [], management_url: null };
   try {
     const url = new URL(service);
     if (
@@ -28,12 +30,23 @@ export const GET = defineHandler(async (c) => {
       standard = new ShortcodeClient(service);
       shortcodeClients.set(service, standard);
     }
-    const [emojis, shortcodes] = await Promise.all([
+    const accountEndpoint = (c.env as Env).EMOJI_ACCOUNT_PROFILE_URL;
+    const key = JSON.stringify([accountEndpoint, service]);
+    if (accountEndpoint && !accountsClients.has(key))
+      accountsClients.set(key, new AccountClient(accountEndpoint, service));
+    const [emojis, shortcodes, accounts] = await Promise.all([
       client.list(),
       standard.list().catch(() => ({})),
+      accountEndpoint ? accountsClients.get(key)!.list() : Promise.resolve([]),
     ]);
     c.header('Cache-Control', 'private, no-store');
-    return { emojis, shortcodes, shortcode_source: standard.source, management_url: service };
+    return {
+      emojis,
+      shortcodes,
+      accounts,
+      shortcode_source: standard.source,
+      management_url: service,
+    };
   } catch {
     return jsonError(c, 503, 'emoji service unavailable');
   }

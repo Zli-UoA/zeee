@@ -20,6 +20,11 @@ export default defineConfig({
       AUTHZ_CLIENT_ID: 'ocfGoISXBgnRMqogOLEdYsZUXusTBczV',
       PUBLIC_ORIGIN: 'https://zeee.zli.works',
       EMOJI_SERVICE_URL: process.env.EMOJI_SERVICE_URL ?? '',
+      EMOJI_ACCOUNT_PROFILE_URL:
+        process.env.EMOJI_ACCOUNT_PROFILE_URL ||
+        (process.env.CELLD_BUILD === '1'
+          ? 'http://emoji.emoji.svc.cluster.local:3001/accounts'
+          : ''),
     },
     d1_databases: [
       {

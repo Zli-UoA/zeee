@@ -1,5 +1,6 @@
 import { useEmojis } from '../emoji/useEmojis';
 import { remarkEmojis } from '../emoji/markdown';
+import { AccountGlyph } from '../emoji/AccountGlyph';
 import {
   createElement,
   isValidElement,
@@ -59,6 +60,7 @@ const sanitizeSchema = {
   attributes: {
     ...defaultSchema.attributes,
     a: [...(defaultSchema.attributes?.a ?? []), 'data*' as const],
+    span: [...(defaultSchema.attributes?.span ?? []), 'dataAuthzAccount', 'dataAccountIcon'],
   },
 };
 
@@ -74,7 +76,7 @@ export function MarkdownView({
   onMobilePanelOpenChange,
   onSidePanelInfoChange,
 }: Props) {
-  const { emojis, shortcodes } = useEmojis();
+  const { emojis, shortcodes, accounts } = useEmojis();
   const articleRef = useRef<HTMLElement>(null);
   const [toc, setToc] = useState<TocItem[]>([]);
   const [backlinks, setBacklinks] = useState<Backlink[] | null>(null);
@@ -129,6 +131,15 @@ export function MarkdownView({
 
   const components = useMemo<Components>(
     () => ({
+      span({ node, children }) {
+        const name = node?.properties?.dataAuthzAccount;
+        const account = accounts.find((item) => item.username === name);
+        return account ? (
+          <AccountGlyph account={account} iconOnly={node?.properties?.dataAccountIcon === 'true'} />
+        ) : (
+          <span>{children}</span>
+        );
+      },
       img({ src, alt }) {
         const custom = emojis.find((e) => e.image_url === src);
         return (
@@ -194,7 +205,7 @@ export function MarkdownView({
         return <Heading level={6} {...props} />;
       },
     }),
-    [pages, emojis],
+    [pages, emojis, accounts],
   );
 
   const hasToc = toc.length > 0;
@@ -251,7 +262,7 @@ export function MarkdownView({
               remarkPlugins={[
                 remarkGfm,
                 [remarkWikiLinks, { resolve }],
-                [remarkEmojis, { emojis, shortcodes }],
+                [remarkEmojis, { emojis, shortcodes, accounts }],
               ]}
               rehypePlugins={[
                 [rehypeSanitize, sanitizeSchema],
