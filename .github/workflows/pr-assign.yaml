@@ -3,9 +3,12 @@ name: pr-assign
 # PR の作成・Draft 解除時に、レビュアーと Assignee を自動で指定する。
 # レビュアーから作成者本人は除外する。1 人分でも失敗してもほかの指定は続ける。
 # reopened では再依頼しない（承認済みの人に再度依頼しないため）。
+# fork の PR も対象にするため pull_request_target を使う（fork の PR では pull_request の GITHUB_TOKEN が読み取り専用になるため）。
+# PR 側のコードは checkout も実行もしない。payload のデータだけを使う。
+# Dependabot の PR は対象外。
 
 on:
-  pull_request:
+  pull_request_target:
     types: [opened, ready_for_review]
 
 permissions:
@@ -14,7 +17,9 @@ permissions:
 
 jobs:
   assign:
-    if: github.event.pull_request.draft == false
+    if: >-
+      github.event.pull_request.draft == false &&
+      github.actor != 'dependabot[bot]'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
