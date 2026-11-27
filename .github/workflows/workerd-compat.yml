@@ -1,0 +1,88 @@
+name: workerd compat daily
+
+# 日次のピアロードリフト検知。workerd の cluster 機能は experimental で、
+# バケット形式や peer protocol が数週間単位で変わるため、pinned バイナリで
+# ビルド＋スモークを毎日流し、関連 upstream issue / release の状態を残す。
+#
+# この workflow は must-pass ではない。upstream の API 参照は best-effort
+# （continue-on-error + フォールバック）で、GitHub API の一時的な不調では
+# 落とさない（通知ノイズを避ける）。ただし job を落とすステップもあり、
+# pnpm install / pnpm build:celld / pinned workerd の install と smoke が
+# 失敗した場合は fail して通知が飛ぶ。
+on:
+  schedule:
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  workerd-compat:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      # checkout / pnpm / node のバージョンは workerd-smoke.yml と揃える。
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12.16.1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.11.0
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm build:celld
+
+      # 既存スモークをそのまま再利用する（workerd-smoke.yml は変更しない）。
+      # 浮動バージョンは使わず、tools/workerd の pin 版を npx なしで入れる。
+      - name: Install pinned workerd
+        run: npm ci --prefix tools/workerd --no-audit --no-fund
+
+      - name: Smoke test with pinned workerd
+        id: smoke
+        run: bash scripts/workerd-smoke.sh
+
+      # スモークの成否にかかわらず常に summary を書く（if: always()）。
+      # API 取得が失敗しても job は落とさない（continue-on-error）。
+      - name: Write compatibility summary
+        if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SMOKE_STATUS: ${{ steps.smoke.outcome }}
+        run: |
+          fetch() {
+            local value
+            value="$(gh api "$1" --jq "$2" 2>/dev/null)" || return 1
+            [[ -n "$value" ]] || return 1
+            printf '%s' "$value"
+          }
+
+          latest="$(fetch repos/cloudflare/workerd/releases/latest .tag_name)" \
+            || latest='取得失敗 (GitHub API)'
+          issue="$(fetch repos/cloudflare/workerd/issues/8155 .state)" \
+            || issue='取得失敗 (GitHub API)'
+          pr="$(fetch repos/cloudflare/workerd/pulls/8176 .state)" \
+            || pr='取得失敗 (GitHub API)'
+
+          {
+            echo '## workerd 日次互換性チェック'
+            echo
+            echo '| 項目 | 状態 |'
+            echo '| --- | --- |'
+            echo "| smoke (pinned workerd) | \`${SMOKE_STATUS:-unknown}\` |"
+            echo "| cloudflare/workerd 最新 release | \`${latest}\` |"
+            echo "| [issue #8155](https://github.com/cloudflare/workerd/issues/8155) | \`${issue}\` |"
+            echo "| [PR #8176](https://github.com/cloudflare/workerd/pulls/8176) | \`${pr}\` |"
+            echo
+            echo 'API 参照の失敗は diagnostic なため job は落としません。install / build / smoke の失敗では job が落ちます。'
+          } >> "$GITHUB_STEP_SUMMARY"

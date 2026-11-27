@@ -1,0 +1,44 @@
+# ⚠️ EXPERIMENTAL / NON-PRODUCTION ONLY — パイロット専用の雛形。
+# 本番データ・本番 credential・実ホスト名は絶対にここへ書かないこと。
+# TLS は前段の Ingress / LoadBalancer で終端し、この Service はクラスタ内専用。
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: workerd
+  labels:
+    app.kubernetes.io/part-of: workerd-pilot
+spec:
+  # クライアント用。外部公開アドレス・TLS 終端は前段の Ingress 側で設定する
+  # (この雛形には Ingress を含めない)。
+  type: ClusterIP
+  selector:
+    app: workerd
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: workerd-cluster-headless
+  labels:
+    app.kubernetes.io/part-of: workerd-pilot
+spec:
+  # ノード間 cluster addr の参照用 headless Service。Pod の IP を DNS で
+  # 列挙できるようにする (例: dig workerd-cluster-headless.<namespace>.svc)。
+  clusterIP: None
+  # 停止中 (ready=503) の Pod もピアとしては参照できる必要があるため true。
+  publishNotReadyAddresses: true
+  selector:
+    app: workerd
+  ports:
+    - name: cluster
+      port: 7000
+      targetPort: cluster
+# 実際のクラスタ参加は deployment.yaml の --cluster-addr=$(POD_IP):7000 が
+# 行うので、この headless Service はピアの検出・到達性確認のための補助이다。
+# DNS 名を広告する方式に変更する場合は --cluster-addr を pod IP ではなく
+# <pod>.workerd-cluster-headless.<namespace>.svc:7000 に置き換えること
+# (IPv4 私用アドレス解決であること、および workerd が公開 IP を拒否することに注意)。

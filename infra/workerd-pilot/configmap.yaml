@@ -1,0 +1,20 @@
+# ⚠️ EXPERIMENTAL / NON-PRODUCTION ONLY — パイロット専用の雛形。
+# 値はすべてプレースホルダ。適用前に非本番バケットへ合わせて書き換えること。
+# 実バケット名・実エンドポイント・トークンは絶対にコミットしない。
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: workerd-pilot-config
+  labels:
+    app.kubernetes.io/part-of: workerd-pilot
+data:
+  # S3 互換バケットの location。GCS を使う場合は gs://BUCKET/PREFIX に変更し、
+  # AWS_* の代わりに GOOGLE_APPLICATION_CREDENTIALS を Secret から渡す。
+  WORKERD_CLUSTER_BUCKET: 's3://REPLACE_WITH_PILOT_BUCKET/REPLACE_WITH_PILOT_PREFIX'
+  AWS_ENDPOINT_URL: 'https://REPLACE_WITH_S3_COMPATIBLE_ENDPOINT'
+  AWS_REGION: 'REPLACE_WITH_REGION'
+  # 停止中の引き継ぎ時間。deployment.yaml の terminationGracePeriodSeconds
+  # (40s) には preStop (5s) も含まれるため、preStop を引いた 35s 以内に収めること。
+  WORKERD_SHUTDOWN_DELAY_MS: '20000'
+  WORKERD_CLUSTER_STOP_TIMEOUT_MS: '8000'

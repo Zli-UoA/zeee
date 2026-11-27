@@ -1,0 +1,152 @@
+# ⚠️ EXPERIMENTAL / NON-PRODUCTION ONLY — パイロット専用の雛形。
+# 本番データ・本番 credential・実ホスト名は絶対にここへ書かないこと。
+# workerd のクラスタモードは --experimental であり、無停止デプロイは未解決
+# (cloudflare/workerd #8155 / #8176)。前提・起動手順は README.md を参照。
+#
+# 3 ノード + 1 バケット。各 Pod は --cluster-addr でクラスタに参加し、
+# Durable Object のオーナーシップは共有バケットへの条件付き書き込みで調整される。
+# バケットが権威コピーを持つため Pod のローカル状態 (emptyDir) は使い捨て。
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: workerd
+  labels:
+    app: workerd
+    app.kubernetes.io/part-of: workerd-pilot
+spec:
+  replicas: 3
+  # 停止する Pod が Durable Object を移譲する 8s より長く待つ。
+  minReadySeconds: 10
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: workerd
+  template:
+    metadata:
+      labels:
+        app: workerd
+        app.kubernetes.io/part-of: workerd-pilot
+    spec:
+      # preStop 5s + WORKERD_SHUTDOWN_DELAY_MS 20s +
+      # WORKERD_CLUSTER_STOP_TIMEOUT_MS 8s をカバーする。
+      terminationGracePeriodSeconds: 40
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532 # emptyDir を image のユーザーが書けるようにする
+        seccompProfile:
+          type: RuntimeDefault
+      # 1 ノード障害で 3 台まとめて止まらないようにノードへ分散。
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: workerd
+      containers:
+        - name: workerd
+          # tools/workerd/package.json の pinned version (1.20261127.1) と一致させる。
+          # 新しいタグに上げるときは必ずピア全台を同じバージョンに揃えること。
+          # (experimental 中はプロトコルがバージョン間で変わり得る)
+          image: docker.io/cloudflare/workerd:1.20261127.1
+          imagePullPolicy: IfNotPresent
+          args:
+            - --experimental
+            # Pod IP の IPv4 私用アドレスをピアへ広告する。peer 間は平文なので
+            # プライベートネットワーク限定 (公開アドレスは workerd が拒否する)。
+            - --cluster-addr=$(POD_IP):7000
+            - --data-dir=/data
+          ports:
+            - name: http
+              containerPort: 8080
+            - name: cluster
+              containerPort: 7000
+          env:
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            # クラスタキーは Secret から環境変数で渡す。キーファイル方式
+            # (WORKERD_CLUSTER_KEY_FILE) に切り替える手順は README 参照。
+            - name: WORKERD_CLUSTER_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: workerd-pilot-cluster
+                  key: key
+            - name: WORKERD_CLUSTER_BUCKET
+              valueFrom:
+                configMapKeyRef:
+                  name: workerd-pilot-config
+                  key: WORKERD_CLUSTER_BUCKET
+            - name: AWS_ENDPOINT_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: workerd-pilot-config
+                  key: AWS_ENDPOINT_URL
+            - name: AWS_REGION
+              valueFrom:
+                configMapKeyRef:
+                  name: workerd-pilot-config
+                  key: AWS_REGION
+            # 認証情報は Secret 参照のみ。マニフェストへ直書きしないこと。
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: workerd-pilot-bucket
+                  key: access-key
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: workerd-pilot-bucket
+                  key: secret-key
+            # SIGTERM 後も 20s は request を捌き、/ready は 503 を返す。
+            - name: WORKERD_SHUTDOWN_DELAY_MS
+              valueFrom:
+                configMapKeyRef:
+                  name: workerd-pilot-config
+                  key: WORKERD_SHUTDOWN_DELAY_MS
+            # その後 8s 以内に Durable Object をピアへ引き継いで終了する。
+            - name: WORKERD_CLUSTER_STOP_TIMEOUT_MS
+              valueFrom:
+                configMapKeyRef:
+                  name: workerd-pilot-config
+                  key: WORKERD_CLUSTER_STOP_TIMEOUT_MS
+          # 起動中・停止中は 503 を返し、Service から外してもらう。
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: cluster
+            periodSeconds: 2
+          lifecycle:
+            # Kubernetes 1.30+ (PodLifecycleSleepAction, default enabled) の
+            # ネイティブ sleep。distroless イメージには sh / sleep がないため
+            # exec ではなく sleep を使う。古いクラスタではこの block を削り、
+            # terminationGracePeriodSeconds と SHUTDOWN_DELAY_MS に頼ること。
+            preStop:
+              sleep:
+                seconds: 5
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: '1'
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          emptyDir: {}

@@ -1,0 +1,19 @@
+# ⚠️ EXPERIMENTAL / NON-PRODUCTION ONLY — 1 ノード用の参考例。
+# workerd README の systemd (socket activation) 例をベースにしている。
+# クライアントは前段の TLS 終端プロキシ経由で 8080 へアクセスする。
+
+[Unit]
+Description=socket for workerd (single-node pilot)
+PartOf=workerd.service
+
+[Socket]
+# systemd が特権ポートの代わりに 8080 を開き、FD 3 として workerd へ渡す。
+# config.capnp の socket name は "http" にすること (service の --socket-fd http=3)。
+ListenStream=0.0.0.0:8080
+
+# 万一 workerd 側で TLS を終端する構成に変更する場合は、README 例のように
+# ListenStream=0.0.0.0:443 を追加し、service の ExecStart に --socket-fd https=4
+# を足すこと (その場合も実秘密はここへ書かない)。
+
+[Install]
+WantedBy=sockets.target
