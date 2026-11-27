@@ -34,8 +34,12 @@ jobs:
 
       - run: pnpm build:celld
 
-      # The workerd version in the lockfile (1.20261023.1) cannot parse
-      # wrangler.json; 1.20261127.1 can, so the smoke script uses that via npx.
-      # It is a smoke test only and does not add a project dependency.
+      # The build's pnpm lockfile pins workerd 1.20261023.1, which cannot parse
+      # wrangler.json. tools/workerd pins 1.20261127.1 in a dedicated npm
+      # lockfile so this must-pass check installs an integrity-verified binary
+      # instead of resolving a floating version from the registry at run time.
+      - name: Install pinned workerd
+        run: npm ci --prefix tools/workerd --no-audit --no-fund
+
       - name: Boot dist/wrangler.json with workerd and probe /api/health
         run: bash scripts/workerd-smoke.sh

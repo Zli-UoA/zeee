@@ -25,9 +25,20 @@ const SUPPORTED_KEYS = new Set([
   'assets',
 ]);
 
-// void/celld emit these empty placeholders in the built config. They have no
-// meaning to workerd, so drop them for the local smoke test.
+// void/celld emit these placeholders in the built config. They have no meaning
+// to workerd, so drop them for the local smoke test — but only while they are
+// empty. A non-empty value (e.g. a service binding) must fail loudly instead of
+// being silently dropped, which would give the smoke test a false negative for
+// unknown/unsupported keys.
 const CELD_ONLY_KEYS = new Set(['services', 'worker_loaders', 'containers']);
+
+function isEmptyPlaceholder(value) {
+  if (Array.isArray(value)) return value.length === 0;
+  if (value !== null && typeof value === 'object') {
+    return Object.keys(value).length === 0;
+  }
+  return false;
+}
 
 const configPath = process.argv[2];
 if (!configPath) {
@@ -44,6 +55,14 @@ for (const key of Object.keys(config)) {
     console.error(
       `::error::dist/wrangler.json contains "${key}", which workerd does not accept. ` +
         `Supported keys: ${[...SUPPORTED_KEYS].join(', ')}`,
+    );
+    process.exit(1);
+  }
+  if (!isEmptyPlaceholder(config[key])) {
+    console.error(
+      `::error::dist/wrangler.json contains a non-empty celld-only key "${key}". ` +
+        `The smoke test cannot pass it through to workerd, so dropping it would hide it. ` +
+        `Value: ${JSON.stringify(config[key])}`,
     );
     process.exit(1);
   }

@@ -1,0 +1,9 @@
+{
+  "name": "zeee-workerd-smoke",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Pinned workerd binary for the CI smoke test (installed via npm ci).",
+  "dependencies": {
+    "workerd": "1.20261127.1"
+  }
+}

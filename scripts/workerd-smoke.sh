@@ -6,7 +6,18 @@ set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 port="${ZEEE_WORKERD_PORT:-17911}"
 origin="http://127.0.0.1:${port}"
-workerd_version="${WORKERD_VERSION:-1.20261127.1}"
+
+# The workerd version is pinned (with integrity hashes) in
+# tools/workerd/package-lock.json, so there is no registry lookup at runtime
+# beyond the reproducible `npm ci` below. CI installs this before running us;
+# install on demand here too so local runs behave the same way.
+tool_dir="$root/tools/workerd"
+workerd_bin="$tool_dir/node_modules/.bin/workerd"
+if [[ ! -x "$workerd_bin" ]]; then
+  echo "workerd is not installed; running npm ci --prefix tools/workerd ..." >&2
+  npm ci --prefix "$tool_dir" --no-audit --no-fund
+fi
+workerd_version="$(node -p "require('$tool_dir/node_modules/workerd/package.json').version")"
 
 if [[ ! -f "$root/dist/wrangler.json" ]]; then
   echo "::error::dist/wrangler.json is missing; run pnpm build:celld first." >&2
@@ -21,7 +32,7 @@ pid=''
 
 cleanup() {
   if [[ -n "$pid" ]]; then
-    # workerd was started in its own session (setsid) so that npx's helper
+    # workerd was started in its own session (setsid) so that its helper
     # processes and the actual workerd binary are all terminated together.
     kill -TERM -- "-$pid" 2>/dev/null || true
     sleep 0.5
@@ -36,9 +47,9 @@ cp -R "$root/dist" "$worker_dir"
 mkdir -p "$data_dir"
 node "$root/scripts/prepare-workerd-config.mjs" "$worker_dir/wrangler.json"
 
-echo "Starting workerd ${workerd_version} on ${origin} ..."
+echo "Starting workerd ${workerd_version} (pinned via tools/workerd/package-lock.json) on ${origin} ..."
 setsid env WORKERD_ESBUILD="$root/node_modules/.bin/esbuild" \
-  npx --yes "workerd@${workerd_version}" serve --experimental \
+  "$workerd_bin" serve --experimental \
     --data-dir "$data_dir" \
     --socket-addr "http=127.0.0.1:${port}" \
     "$worker_dir/wrangler.json" > "$log" 2>&1 &
