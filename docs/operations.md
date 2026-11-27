@@ -125,3 +125,92 @@ API では `createPage`、`updatePageTitle`、undelete の衝突を `409` と `{
 - `.dev.vars` と `dist/` は Git 管理外
 - 本番ビルドに `ZEEE_DEV_AUTH` を入れない（deploy workflow でも検証している）
 - credential をローテーションしたら Environment secrets を更新し、`workflow_dispatch` で再デプロイする
+
+## 移行前バックアップ（workerd 移行の前提条件）
+
+移行前に **D1 の論理ダンプ** と **各ページの Durable Object (DO) 内 Yjs 生 state** の2種類を取得する。D1 にはユーザー・セッション（トークンを含む）・本文・リビジョンといった PII が入るため、保存先はリポジトリ外の暗号化済みディスクに限定し、以下を守る。
+
+- ダンプを Git 管理下（`dist/` 含む）に置かない。ファイルモードは `chmod 600` にする
+- セッショントークンはそのまま他人のログインに使える。バックアップ自体を credential と同等に扱う
+- 取得後は暗号化して保管し、リハーサル完了後に消す。保持期間を決めておく
+- コマンド中のトークンや実ホスト名をシェル履歴・Issue・PR に貼らない。環境変数名だけを残す
+
+### D1 の論理ダンプ
+
+`dist/wrangler.json` の D1 binding 名は `DB`。Wrangler は対象アカウントへの認証済みであること（credential はリポジトリに置かない）。
+
+```sh
+wrangler d1 export DB --remote --config dist/wrangler.json --output "$BACKUP_DIR/d1.sql"
+```
+
+仮想テーブル `page_fts` を含むダンプが取得できるが、**D1 の論理ダンプのインポートは非対応**。リストアは `d1 execute` で SQL を流し込み、FTS は別途作り直す。ダンプ内の `page_fts` と shadow テーブル（`page_fts_data` / `page_fts_idx` / `page_fts_content` / `page_fts_docsize` / `page_fts_config`）の DDL・INSERT を取り除いてから実行する。
+
+```sh
+# 前処理済み SQL をリストア先の空の D1 に流す
+wrangler d1 execute DB --remote --config dist/wrangler.json --file "$BACKUP_DIR/d1.clean.sql"
+```
+
+`page_body` から FTS を再構築する。FTS5 の `rebuild` は **仮想テーブル本体 `page_fts` を指定する**（`page_fts_data` などの shadow テーブル名を指定しない）。trigram tokenizer が使えない環境では `tokenize='trigram'` を外した DDL（`src/server/schema.ts` の fallback と同じ）を使う。
+
+```sql
+-- 仮想テーブルは D1 のダンプから import できないので作り直す
+CREATE VIRTUAL TABLE IF NOT EXISTS page_fts
+  USING fts5(page_id UNINDEXED, title, body, tokenize='trigram');
+
+-- page_body を正として再投入（削除済みページは対象外）
+DELETE FROM page_fts;
+INSERT INTO page_fts (page_id, title, body)
+SELECT p.id, p.title, COALESCE(b.markdown, '')
+FROM page p
+LEFT JOIN page_body b ON b.page_id = p.id
+WHERE p.deleted_at IS NULL;
+
+-- FTS5 の実テーブル名は page_fts。インデックスを作り直す
+INSERT INTO page_fts(page_fts) VALUES('rebuild');
+-- 必要なら低頻度で optimize も実行: INSERT INTO page_fts(page_fts) VALUES('optimize');
+```
+
+復元後、`SELECT value FROM meta WHERE key = 'migration:0002_path_uniqueness';` が `1` であることと、検索がヒットすることを確認する。
+
+### DO の Yjs 生 state のエクスポート
+
+`scripts/export-do-state.mjs` が `GET /api/pages` の cursor を辿って全ページ ID を列挙し、各 `GET /api/pages/:id/state` の `application/octet-stream` を `<outdir>/<pageId>.yjs` に保存する。4xx は即座に失敗、ネットワークエラー / 429 / 5xx は再試行する（既定 2 回、`--retries` で変更）。
+
+```sh
+export ZEEE_BASE_URL='https://<deployment-host>'
+# ブラウザの DevTools から Cookie ヘッダー値（zeee_session=... / __Host-zeee_session=...）をコピー
+export ZEEE_SESSION_COOKIE='<cookie-header-value>'
+
+node scripts/export-do-state.mjs --out "$BACKUP_DIR/state" --dry-run   # ID と保存先だけ確認
+node scripts/export-do-state.mjs --out "$BACKUP_DIR/state"             # 全ページを書き出し
+# pnpm backup:state -- --out "$BACKUP_DIR/state" --limit 10 でも実行可能
+```
+
+ローカル開発（`ZEEE_DEV_AUTH=1`）ではセッション cookie をスクリプトが `GET /auth/dev` から取得する。**loopback（localhost / 127.0.0.1 / ::1）以外に `ZEEE_DEV_AUTH=1` を渡してはならない**。本番ビルド・本番デプロイには絶対に含めない（`void.config.ts` の既定値は空、deploy workflow も検証している）。
+
+```sh
+ZEEE_BASE_URL='http://127.0.0.1:8787' ZEEE_DEV_AUTH=1 \
+  node scripts/export-do-state.mjs --out "$BACKUP_DIR/state" --dry-run
+```
+
+エクスポートした `.yjs` は元の Yjs クライアント ID / undo 履歴を含む生 update なので、`/replace`（Markdown のみ）で取り込むと失われる。必ず次の `/import-state` を使う。
+
+### Yjs state の復元
+
+`/api/pages/:id/import-state` は移行専用エンドポイント。一時的な移行デプロイでのみ `ZEEE_MIGRATION_IMPORT=1` を設定し、通常の本番ビルドには入れない。無効なデプロイでは 404 になる。
+
+**重要**: import 前にそのページへの WebSocket 接続をすべて切る。接続が残っていると DO が `409 close websockets before importing` を返す（旧クライアントの update と混ざらないための意図的な拒否）。ページを開いているブラウザ・エディタを閉じ、トラフィックを止めてから実行する。409 が解消するまで少し待って再試行してもよい。
+
+```sh
+for file in "$BACKUP_DIR/state"/*.yjs; do
+  id=$(basename "$file" .yjs)
+  curl --fail-with-body -X POST \
+    -H "Cookie: $ZEEE_SESSION_COOKIE" \
+    -H "Origin: $ZEEE_BASE_URL" \
+    -H 'Content-Type: application/octet-stream' \
+    --data-binary "@$file" \
+    "$ZEEE_BASE_URL/api/pages/$id/import-state"
+done
+```
+
+`Origin` は `PUBLIC_ORIGIN` と一致させること（不一致なら 403）。1 リクエストあたり最大 5 MiB / 30 秒（超過は 413、不正な update は 400）。すべての試行は `page.state_import` 監査ログに残る。取り込み後は `GET /api/pages/:id/state` が元のバイト列と一致することと、ページ本文が表示されることを確認してから移行デプロイを停止する。

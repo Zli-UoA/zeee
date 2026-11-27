@@ -11,6 +11,7 @@
     "dev:celld": "pnpm build:celld && concurrently -k -n vite,celld -c blue,green \"pnpm watch:celld\" \"CELLD_ESBUILD=./node_modules/.bin/esbuild celld dev dist\"",
     "check": "vp check && tsc --noEmit",
     "spike": "pnpm build:celld && node scripts/spike-check.mjs",
+    "backup:state": "node scripts/export-do-state.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vp test"
   },
