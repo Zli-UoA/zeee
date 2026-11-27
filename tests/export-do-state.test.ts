@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vite-plus/test';
@@ -9,12 +9,19 @@ import { exportPageStates, main } from '../scripts/export-do-state.mjs';
 type Call = { url: URL; init: RequestInit };
 type Handler = (url: URL, init: RequestInit) => Response | Promise<Response>;
 
-function mockFetch(handler: Handler) {
+function mockFetch(
+  handler: Handler,
+  trashIds: string[] = [],
+  trashNextCursor: string | null = null,
+) {
   const calls: Call[] = [];
   const fetchImpl = async (input: string | URL | Request, init: RequestInit = {}) => {
     const url =
       input instanceof URL ? input : input instanceof Request ? new URL(input.url) : new URL(input);
     calls.push({ url, init });
+    if (url.pathname === '/api/trash' && url.searchParams.get('cursor') === null) {
+      return pageList(trashIds, trashNextCursor);
+    }
     return handler(url, init);
   };
   return { fetchImpl, calls };
@@ -106,8 +113,9 @@ describe('export-do-state', () => {
       join(dir, 'page-a.yjs'),
       join(dir, 'page-b.yjs'),
     ]);
-    expect(calls).toHaveLength(1);
+    expect(calls).toHaveLength(2); // active pages + trash
     expect(calls[0].url.pathname).toBe('/api/pages');
+    expect(calls[1].url.pathname).toBe('/api/trash');
     expect(existsSync(dir)).toBe(false);
   });
 
@@ -129,7 +137,7 @@ describe('export-do-state', () => {
       });
 
       expect(result.ids).toEqual(['page-1', 'page-2']);
-      expect(calls).toHaveLength(3);
+      expect(calls).toHaveLength(3); // limit reached in /api/pages; trash is not queried
       expect(calls[0].url.searchParams.get('limit')).toBe('2');
       expect(existsSync(join(dir, 'page-3.yjs'))).toBe(false);
     } finally {
@@ -155,7 +163,7 @@ describe('export-do-state', () => {
           log: () => {},
         }),
       ).rejects.toMatchObject({ status: 404, message: expect.stringContaining('HTTP 404') });
-      expect(calls).toHaveLength(2);
+      expect(calls).toHaveLength(3); // active pages + trash + failing state GET
       expect(existsSync(join(dir, 'missing.yjs'))).toBe(false);
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -213,22 +221,27 @@ describe('export-do-state', () => {
       expect(result.count).toBe(1);
       expect(attempts).toBe(3);
 
+      const deadDir = mkdtempSync(join(tmpdir(), 'zeee-export-dead-'));
       const dead = mockFetch((url) => {
         if (url.pathname === '/api/pages') return pageList(['page-1']);
         throw new Error('connection refused');
       });
-      await expect(
-        exportPageStates({
-          baseUrl: 'https://zeee.example.test',
-          cookie: 'zeee_session=test-token',
-          outdir: dir,
-          fetchImpl: dead.fetchImpl,
-          retries: 2,
-          retryDelayMs: 0,
-          log: () => {},
-        }),
-      ).rejects.toThrow(/network error: connection refused/);
-      expect(dead.calls.filter((call) => call.url.pathname.endsWith('/state'))).toHaveLength(3);
+      try {
+        await expect(
+          exportPageStates({
+            baseUrl: 'https://zeee.example.test',
+            cookie: 'zeee_session=test-token',
+            outdir: deadDir,
+            fetchImpl: dead.fetchImpl,
+            retries: 2,
+            retryDelayMs: 0,
+            log: () => {},
+          }),
+        ).rejects.toThrow(/network error: connection refused/);
+        expect(dead.calls.filter((call) => call.url.pathname.endsWith('/state'))).toHaveLength(3);
+      } finally {
+        rmSync(deadDir, { recursive: true, force: true });
+      }
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -320,5 +333,259 @@ describe('export-do-state', () => {
       }),
     ).rejects.toThrow(/ZEEE_SESSION_COOKIE/);
     expect(calls).toHaveLength(0);
+  });
+
+  it('retries a 429 state response and fails loudly when retries are exhausted', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'zeee-export-429-'));
+    try {
+      let attempts = 0;
+      const flaky = mockFetch((url) => {
+        if (url.pathname === '/api/pages') return pageList(['page-1']);
+        attempts += 1;
+        if (attempts === 1) return new Response('slow down', { status: 429 });
+        return state([1, 2]);
+      });
+      const result = await exportPageStates({
+        baseUrl: 'https://zeee.example.test',
+        cookie: 'zeee_session=test-token',
+        outdir: dir,
+        fetchImpl: flaky.fetchImpl,
+        retries: 2,
+        retryDelayMs: 0,
+        log: () => {},
+      });
+      expect(result.count).toBe(1);
+      expect(attempts).toBe(2);
+      expect(readFileSync(join(dir, 'page-1.yjs'))).toEqual(Buffer.from([1, 2]));
+
+      const stuckDir = mkdtempSync(join(tmpdir(), 'zeee-export-429-stuck-'));
+      const stuck = mockFetch((url) => {
+        if (url.pathname === '/api/pages') return pageList(['page-1']);
+        return new Response('slow down', { status: 429 });
+      });
+      try {
+        await expect(
+          exportPageStates({
+            baseUrl: 'https://zeee.example.test',
+            cookie: 'zeee_session=test-token',
+            outdir: stuckDir,
+            fetchImpl: stuck.fetchImpl,
+            retries: 2,
+            retryDelayMs: 0,
+            log: () => {},
+          }),
+        ).rejects.toMatchObject({ status: 429, message: expect.stringContaining('HTTP 429') });
+        expect(stuck.calls.filter((call) => call.url.pathname.endsWith('/state'))).toHaveLength(3);
+      } finally {
+        rmSync(stuckDir, { recursive: true, force: true });
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses unsafe page ids from either list endpoint before building a path', async () => {
+    const badIds = ['../escape', 'a/b', '..', 'x'.repeat(129)];
+    for (const id of badIds) {
+      const { fetchImpl } = mockFetch((url) => {
+        if (url.pathname === '/api/pages') return pageList([id]);
+        throw new Error('state must not be fetched for an unsafe id');
+      });
+      await expect(
+        exportPageStates({
+          baseUrl: 'https://zeee.example.test',
+          cookie: 'zeee_session=test-token',
+          outdir: join(tmpdir(), 'zeee-export-unsafe-id'),
+          dryRun: true,
+          fetchImpl,
+          retryDelayMs: 0,
+          log: () => {},
+        }),
+      ).rejects.toThrow(/invalid page id/);
+
+      const fromTrash = mockFetch(
+        (url) => {
+          if (url.pathname === '/api/pages') return pageList([]);
+          throw new Error('state must not be fetched for an unsafe id');
+        },
+        [id],
+      );
+      await expect(
+        exportPageStates({
+          baseUrl: 'https://zeee.example.test',
+          cookie: 'zeee_session=test-token',
+          outdir: join(tmpdir(), 'zeee-export-unsafe-trash-id'),
+          dryRun: true,
+          fetchImpl: fromTrash.fetchImpl,
+          retryDelayMs: 0,
+          log: () => {},
+        }),
+      ).rejects.toThrow(/invalid page id/);
+    }
+  });
+
+  it('rejects an empty nextCursor instead of looping', async () => {
+    const { fetchImpl, calls } = mockFetch((url) => {
+      if (url.pathname === '/api/pages') return pageList(['page-1'], '');
+      throw new Error(`unexpected request: ${url}`);
+    });
+    await expect(
+      exportPageStates({
+        baseUrl: 'https://zeee.example.test',
+        cookie: 'zeee_session=test-token',
+        outdir: join(tmpdir(), 'zeee-export-empty-cursor'),
+        dryRun: true,
+        fetchImpl,
+        retryDelayMs: 0,
+        log: () => {},
+      }),
+    ).rejects.toThrow(/cursor did not advance/);
+    const listCalls = calls.filter((call) => call.url.pathname === '/api/pages');
+    expect(listCalls).toHaveLength(2);
+    expect(listCalls[1].url.searchParams.get('cursor')).toBe('');
+  });
+
+  it('rejects a wrong Content-Type and an empty state body', async () => {
+    const cases: Array<[Response, RegExp]> = [
+      [
+        new Response('<html>nope</html>', { headers: { 'content-type': 'text/html' } }),
+        /unexpected Content-Type/,
+      ],
+      [
+        new Response(new Uint8Array(0), {
+          headers: { 'content-type': 'application/octet-stream' },
+        }),
+        /empty state response/,
+      ],
+    ];
+    const dir = mkdtempSync(join(tmpdir(), 'zeee-export-bad-state-'));
+    try {
+      for (const [response, expected] of cases) {
+        const { fetchImpl } = mockFetch((url) => {
+          if (url.pathname === '/api/pages') return pageList(['page-1']);
+          return response;
+        });
+        await expect(
+          exportPageStates({
+            baseUrl: 'https://zeee.example.test',
+            cookie: 'zeee_session=test-token',
+            outdir: dir,
+            fetchImpl,
+            retryDelayMs: 0,
+            log: () => {},
+          }),
+        ).rejects.toThrow(expected);
+        expect(existsSync(join(dir, 'page-1.yjs'))).toBe(false);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('walks trash cursors too and exports soft-deleted page state', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'zeee-export-trash-'));
+    try {
+      const { fetchImpl, calls } = mockFetch(
+        (url) => {
+          if (url.pathname === '/api/pages') return pageList(['active-1']);
+          if (url.pathname === '/api/trash' && url.searchParams.get('cursor') === 'trash-1') {
+            return pageList(['trashed-2']);
+          }
+          if (url.pathname.endsWith('/state')) return state([7]);
+          throw new Error(`unexpected request: ${url}`);
+        },
+        ['trashed-1'],
+        'trash-1',
+      );
+      const result = await exportPageStates({
+        baseUrl: 'https://zeee.example.test',
+        cookie: 'zeee_session=test-token',
+        outdir: dir,
+        fetchImpl,
+        retryDelayMs: 0,
+        log: () => {},
+      });
+      expect(result.ids).toEqual(['active-1', 'trashed-1', 'trashed-2']);
+      expect(readFileSync(join(dir, 'trashed-2.yjs'))).toEqual(Buffer.from([7]));
+      expect(
+        calls
+          .filter((call) => call.url.pathname === '/api/trash')
+          .map((call) => call.url.searchParams.get('cursor')),
+      ).toEqual([null, 'trash-1']);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('writes a manifest, skips intact files, re-exports stale files and leaves no temp files', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'zeee-export-manifest-'));
+    try {
+      const { fetchImpl, calls } = mockFetch((url) => {
+        if (url.pathname === '/api/pages') return pageList(['page-1', 'page-2']);
+        return state([1, 2, 3]);
+      });
+      const options = {
+        baseUrl: 'https://zeee.example.test',
+        cookie: 'zeee_session=test-token',
+        outdir: dir,
+        fetchImpl,
+        retryDelayMs: 0,
+        log: () => {},
+      };
+      await exportPageStates(options);
+
+      const manifestPath = join(dir, 'manifest.json');
+      const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+      expect(manifest.version).toBe(1);
+      expect(manifest.entries['page-1']).toEqual({
+        bytes: 3,
+        sha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+      });
+      expect(calls.filter((call) => call.url.pathname.endsWith('/state'))).toHaveLength(2);
+      expect(readdirSync(dir).some((name) => name.includes('.tmp-'))).toBe(false);
+
+      calls.splice(0);
+      const resumed = await exportPageStates(options);
+      expect(resumed.files.filter((file: { skipped?: boolean }) => file.skipped)).toHaveLength(2);
+      expect(calls.filter((call) => call.url.pathname.endsWith('/state'))).toHaveLength(0);
+
+      writeFileSync(join(dir, 'page-1.yjs'), Buffer.from([9, 9]));
+      const repaired = await exportPageStates(options);
+      expect(repaired.files.find((file: { id: string }) => file.id === 'page-1').skipped).toBe(
+        false,
+      );
+      expect(readFileSync(join(dir, 'page-1.yjs'))).toEqual(Buffer.from([1, 2, 3]));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('reports N/M progress and keeps completed files when a later page fails', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'zeee-export-progress-'));
+    try {
+      const logs: string[] = [];
+      const { fetchImpl } = mockFetch((url) => {
+        if (url.pathname === '/api/pages') return pageList(['page-1', 'page-2', 'page-3']);
+        if (url.pathname.endsWith('/page-1/state')) return state([1]);
+        return new Response('down', { status: 500 });
+      });
+      await expect(
+        exportPageStates({
+          baseUrl: 'https://zeee.example.test',
+          cookie: 'zeee_session=test-token',
+          outdir: dir,
+          fetchImpl,
+          retries: 0,
+          retryDelayMs: 0,
+          log: (message: string) => logs.push(message),
+        }),
+      ).rejects.toThrow(/HTTP 500/);
+      expect(logs.join('\n')).toMatch(/export stopped after 1\/3 page\(s\)/);
+      expect(existsSync(join(dir, 'page-1.yjs'))).toBe(true);
+      expect(existsSync(join(dir, 'page-2.yjs'))).toBe(false);
+      expect(existsSync(join(dir, 'manifest.json'))).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

@@ -1,9 +1,12 @@
-import { mkdir, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const PAGE_LIST_PATH = '/api/pages';
+const TRASH_LIST_PATH = '/api/trash';
 const STATE_SUFFIX = '/state';
+const MANIFEST_FILE = 'manifest.json';
 const MAX_REQUEST_PAGE_SIZE = 100; // src/server/pagination.ts: MAX_PAGE_SIZE
 const DEFAULT_RETRIES = 2;
 const DEFAULT_RETRY_DELAY_MS = 500;
@@ -20,7 +23,8 @@ Env:
 
 Options:
   --out <dir>      Output directory (default: backups/state). Files: <pageId>.yjs
-  --limit <n>      Export at most n pages
+                   plus manifest.json (page id, byte count, sha256) for resumable runs.
+  --limit <n>      Export at most n pages (active pages first, then trash)
   --dry-run        Only list page ids and planned file names; no state GET / writes
   --retries <n>    Retries for network errors, 429 and 5xx (default: 2)
   --help           Show this help
@@ -164,8 +168,8 @@ async function readJson(response, label) {
   }
 }
 
-/** Walk /api/pages cursors until exhaustion or `limit` ids have been collected. */
-export async function listPageIds(options) {
+/** Walk one cursor-paginated id list until exhaustion or `limit` ids have been collected. */
+async function walkIdList(listPath, options) {
   const {
     baseUrl,
     cookie = '',
@@ -183,12 +187,12 @@ export async function listPageIds(options) {
   const seenCursors = new Set();
   let cursor = null;
   for (;;) {
-    const target = new URL(PAGE_LIST_PATH, url);
+    const target = new URL(listPath, url);
     const requestSize =
       limit === null ? MAX_REQUEST_PAGE_SIZE : Math.min(MAX_REQUEST_PAGE_SIZE, limit - ids.length);
     target.searchParams.set('limit', String(requestSize));
     if (cursor !== null) target.searchParams.set('cursor', cursor);
-    const label = `GET ${PAGE_LIST_PATH}`;
+    const label = `GET ${listPath}`;
     const response = await fetchWithRetry(
       fetchImpl,
       target,
@@ -217,6 +221,31 @@ export async function listPageIds(options) {
     seenCursors.add(next);
     cursor = next;
   }
+}
+
+/** /api/pages only returns active pages (deleted_at IS NULL). */
+export async function listPageIds(options) {
+  return walkIdList(PAGE_LIST_PATH, options);
+}
+
+/** /api/trash returns soft-deleted pages, whose DO state is intentionally kept. */
+export async function listTrashIds(options) {
+  return walkIdList(TRASH_LIST_PATH, options);
+}
+
+/** Active pages first, then trash, with a single overall `--limit`. */
+async function collectPageIds(options) {
+  const { limit = null, ...rest } = options;
+  const ids = await walkIdList(PAGE_LIST_PATH, { ...rest, limit });
+  if (limit !== null && ids.length >= limit) return ids;
+  const remaining = limit === null ? null : limit - ids.length;
+  const trashed = await walkIdList(TRASH_LIST_PATH, { ...rest, limit: remaining });
+  for (const id of trashed) {
+    if (ids.includes(id)) continue;
+    ids.push(id);
+    if (limit !== null && ids.length >= limit) break;
+  }
+  return ids;
 }
 
 /** Log in through /auth/dev on a loopback deployment and return its Cookie value. */
@@ -252,7 +281,43 @@ export async function acquireDevSession(options) {
   return entry.split(';')[0];
 }
 
-/** Export one .yjs file per page. Only `fetchImpl` is injected by tests. */
+async function readManifest(path, log) {
+  try {
+    const parsed = JSON.parse(await readFile(path, 'utf8'));
+    if (parsed?.version === 1 && parsed.entries && typeof parsed.entries === 'object') {
+      return parsed;
+    }
+  } catch {
+    // Missing or corrupt manifest: start from scratch.
+  }
+  log(`no usable manifest at ${path}; exporting all pages`);
+  return { version: 1, entries: {} };
+}
+
+async function fileMatches(path, entry) {
+  if (!entry || !Number.isInteger(entry.bytes) || typeof entry.sha256 !== 'string') return false;
+  try {
+    const info = await stat(path);
+    if (!info.isFile() || info.size !== entry.bytes) return false;
+    const bytes = await readFile(path);
+    return createHash('sha256').update(bytes).digest('hex') === entry.sha256;
+  } catch {
+    return false;
+  }
+}
+
+/** Write via a temp file + rename so a partial file is never mistaken for a backup. */
+async function writeAtomic(path, bytes) {
+  const tmp = `${path}.tmp-${process.pid}`;
+  try {
+    await writeFile(tmp, bytes);
+    await rename(tmp, path);
+  } finally {
+    await rm(tmp, { force: true });
+  }
+}
+
+/** Export one .yjs file per active/trashed page. Only `fetchImpl` is injected by tests. */
 export async function exportPageStates(options = {}) {
   const {
     baseUrl,
@@ -272,44 +337,66 @@ export async function exportPageStates(options = {}) {
   }
   if (!dryRun) await mkdir(outdir, { recursive: true });
 
-  const ids = await listPageIds({
-    baseUrl: url,
-    cookie,
-    limit,
-    fetchImpl,
-    retries,
-    retryDelayMs,
-    timeoutMs,
-  });
+  const manifestPath = dryRun ? null : join(outdir, MANIFEST_FILE);
+  const manifest = dryRun ? null : await readManifest(manifestPath, log);
   const files = [];
-  for (const id of ids) {
-    const path = join(outdir, `${id}.yjs`);
-    if (dryRun) {
-      files.push({ id, path, bytes: null });
-      log(`[dry-run] ${id} -> ${path}`);
-      continue;
-    }
-    const target = new URL(`/api/pages/${encodeURIComponent(id)}${STATE_SUFFIX}`, url);
-    const label = `GET /api/pages/${id}${STATE_SUFFIX}`;
-    const response = await fetchWithRetry(
+  let ids = [];
+  try {
+    ids = await collectPageIds({
+      baseUrl: url,
+      cookie,
+      limit,
       fetchImpl,
-      target,
-      {
-        headers: requestHeaders(cookie, url),
-      },
-      { retries, retryDelayMs, timeoutMs, label },
-    );
-    const contentType = (response.headers.get('content-type') ?? '').toLowerCase();
-    if (!contentType.includes('application/octet-stream')) {
-      throw new ExportError(`${label}: unexpected Content-Type: ${contentType || '(none)'}`);
+      retries,
+      retryDelayMs,
+      timeoutMs,
+    });
+    for (const id of ids) {
+      const path = join(outdir, `${id}.yjs`);
+      if (dryRun) {
+        files.push({ id, path, bytes: null });
+        log(`[dry-run] ${id} -> ${path}`);
+        continue;
+      }
+      const entry = manifest.entries[id];
+      if (await fileMatches(path, entry)) {
+        files.push({ id, path, bytes: entry.bytes, sha256: entry.sha256, skipped: true });
+        log(`skipped ${id} -> ${path} (unchanged, ${entry.bytes} bytes)`);
+        continue;
+      }
+      const target = new URL(`/api/pages/${encodeURIComponent(id)}${STATE_SUFFIX}`, url);
+      const label = `GET /api/pages/${id}${STATE_SUFFIX}`;
+      const response = await fetchWithRetry(
+        fetchImpl,
+        target,
+        {
+          headers: requestHeaders(cookie, url),
+        },
+        { retries, retryDelayMs, timeoutMs, label },
+      );
+      const contentType = (response.headers.get('content-type') ?? '').toLowerCase();
+      if (!contentType.includes('application/octet-stream')) {
+        throw new ExportError(`${label}: unexpected Content-Type: ${contentType || '(none)'}`);
+      }
+      const bytes = new Uint8Array(await response.arrayBuffer());
+      if (bytes.length === 0) throw new ExportError(`${label}: empty state response`);
+      const sha256 = createHash('sha256').update(bytes).digest('hex');
+      await writeAtomic(path, bytes);
+      manifest.entries[id] = { bytes: bytes.length, sha256 };
+      await writeAtomic(manifestPath, Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`));
+      files.push({ id, path, bytes: bytes.length, sha256, skipped: false });
+      log(`exported ${id} -> ${path} (${bytes.length} bytes)`);
     }
-    const bytes = new Uint8Array(await response.arrayBuffer());
-    if (bytes.length === 0) throw new ExportError(`${label}: empty state response`);
-    await writeFile(path, bytes);
-    files.push({ id, path, bytes: bytes.length });
-    log(`exported ${id} -> ${path} (${bytes.length} bytes)`);
+  } catch (error) {
+    if (!dryRun && ids.length > 0) {
+      log(
+        `export stopped after ${files.length}/${ids.length} page(s); ` +
+          `${manifestPath} keeps completed files for the next run`,
+      );
+    }
+    throw error;
   }
-  return { ids, files, count: ids.length, dryRun };
+  return { ids, files, count: ids.length, dryRun, manifest: manifestPath };
 }
 
 export async function main(argv = process.argv.slice(2), dependencies = {}) {

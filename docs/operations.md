@@ -137,17 +137,36 @@ API では `createPage`、`updatePageTitle`、undelete の衝突を `409` と `{
 
 ### D1 の論理ダンプ
 
-`dist/wrangler.json` の D1 binding 名は `DB`。Wrangler は対象アカウントへの認証済みであること（credential はリポジトリに置かない）。
+`dist/wrangler.json` の D1 binding 名は `DB`。Wrangler は対象アカウントへの認証済みであること（credential はリポジトリに置かない）。以降の Wrangler 呼び出しは [docs/scale.md](scale.md) と同じく `pnpm exec wrangler` を使う。
+
+本番 D1 には仮想テーブル `page_fts`（FTS5 trigram、`src/server/schema.ts`）が必ず存在する。既定 compatibility の `wrangler d1 export` は仮想テーブル込みの DB をエクスポートできない。**可能になったのは 2026-11-12 の changelog で `--compatibility sqlite3_cli_only` が追加されたとき**で、`wrangler >= 4.159.0` かつ `--remote` 専用。非対話実行のため `-y` も付ける。
 
 ```sh
-wrangler d1 export DB --remote --config dist/wrangler.json --output "$BACKUP_DIR/d1.sql"
+# wrangler >= 4.159.0 / --compatibility sqlite3_cli_only は --remote 専用
+pnpm exec wrangler d1 export DB --remote --config dist/wrangler.json \
+  --compatibility sqlite3_cli_only -y --output "$BACKUP_DIR/d1.sql"
 ```
 
-仮想テーブル `page_fts` を含むダンプが取得できるが、**D1 の論理ダンプのインポートは非対応**。リストアは `d1 execute` で SQL を流し込み、FTS は別途作り直す。ダンプ内の `page_fts` と shadow テーブル（`page_fts_data` / `page_fts_idx` / `page_fts_content` / `page_fts_docsize` / `page_fts_config`）の DDL・INSERT を取り除いてから実行する。
+`sqlite3_cli_only` のダンプは `PRAGMA writable_schema=ON` と `INSERT INTO sqlite_schema` を含む。**`page_fts` と shadow テーブルの DDL/INSERT だけを除去すると再投入が `SQLITE_AUTH` で止まる**ので、前処理では次もすべて無効化する。
+
+- `PRAGMA writable_schema=ON` / `PRAGMA writable_schema=OFF`
+- `sqlite_schema` / `sqlite_master` への `INSERT` / `UPDATE` / `DELETE`
+- `page_fts` と shadow テーブル（`page_fts_data` / `page_fts_idx` / `page_fts_content` / `page_fts_docsize` / `page_fts_config`）の DDL / INSERT / DELETE
+
+行単位の例（ダンプを目視確認してから適用し、生成結果を確認する）:
 
 ```sh
-# 前処理済み SQL をリストア先の空の D1 に流す
-wrangler d1 execute DB --remote --config dist/wrangler.json --file "$BACKUP_DIR/d1.clean.sql"
+sed -E \
+  -e '/PRAGMA writable_schema/I s/^/-- /' \
+  -e '/(INSERT|UPDATE|DELETE).* (sqlite_schema|sqlite_master)/I s/^/-- /' \
+  -e '/(CREATE VIRTUAL TABLE|INSERT INTO|DELETE FROM|DROP TABLE).*page_fts(_(data|idx|content|docsize|config))?/I s/^/-- /' \
+  "$BACKUP_DIR/d1.sql" > "$BACKUP_DIR/d1.clean.sql"
+```
+
+前処理済み SQL をリストア先の空の D1 に流す（`d1 import` は使わない）:
+
+```sh
+pnpm exec wrangler d1 execute DB --remote --config dist/wrangler.json --file "$BACKUP_DIR/d1.clean.sql"
 ```
 
 `page_body` から FTS を再構築する。FTS5 の `rebuild` は **仮想テーブル本体 `page_fts` を指定する**（`page_fts_data` などの shadow テーブル名を指定しない）。trigram tokenizer が使えない環境では `tokenize='trigram'` を外した DDL（`src/server/schema.ts` の fallback と同じ）を使う。
@@ -174,7 +193,9 @@ INSERT INTO page_fts(page_fts) VALUES('rebuild');
 
 ### DO の Yjs 生 state のエクスポート
 
-`scripts/export-do-state.mjs` が `GET /api/pages` の cursor を辿って全ページ ID を列挙し、各 `GET /api/pages/:id/state` の `application/octet-stream` を `<outdir>/<pageId>.yjs` に保存する。4xx は即座に失敗、ネットワークエラー / 429 / 5xx は再試行する（既定 2 回、`--retries` で変更）。
+`scripts/export-do-state.mjs` が `GET /api/pages` と `GET /api/trash` の cursor をそれぞれ辿って ID を統合列挙し、各 `GET /api/pages/:id/state` の `application/octet-stream` を `<outdir>/<pageId>.yjs` に保存する。`/api/pages` は `deleted_at IS NULL` の active のみを返すが、`softDeletePage` は DO の state を消さないため、ゴミ箱のページの生 update（クライアント ID / undo 履歴）も対象に含める。4xx は即座に失敗、ネットワークエラー / 429 / 5xx は再試行する（既定 2 回、`--retries` で変更）。
+
+各ファイルの ID・バイト数・SHA-256 を `<outdir>/manifest.json` に記録する。再実行時は内容が一致するファイルをスキップし、不一致（stale）なファイルは再取得して上書きする。書き込みは一時ファイル + rename の atomic write なので途中で切れても出力が壊れない。途中失敗時は `N/M` の進捗を表示し、完了済みファイルは次回実行で再利用される。
 
 ```sh
 export ZEEE_BASE_URL='https://<deployment-host>'
@@ -182,11 +203,11 @@ export ZEEE_BASE_URL='https://<deployment-host>'
 export ZEEE_SESSION_COOKIE='<cookie-header-value>'
 
 node scripts/export-do-state.mjs --out "$BACKUP_DIR/state" --dry-run   # ID と保存先だけ確認
-node scripts/export-do-state.mjs --out "$BACKUP_DIR/state"             # 全ページを書き出し
-# pnpm backup:state -- --out "$BACKUP_DIR/state" --limit 10 でも実行可能
+node scripts/export-do-state.mjs --out "$BACKUP_DIR/state"             # active + ゴミ箱を書き出し
+# pnpm backup:state -- --out "$BACKUP_DIR/state" --limit 10 でも実行可能（active 優先）
 ```
 
-ローカル開発（`ZEEE_DEV_AUTH=1`）ではセッション cookie をスクリプトが `GET /auth/dev` から取得する。**loopback（localhost / 127.0.0.1 / ::1）以外に `ZEEE_DEV_AUTH=1` を渡してはならない**。本番ビルド・本番デプロイには絶対に含めない（`void.config.ts` の既定値は空、deploy workflow も検証している）。
+ローカル開発（`ZEEE_DEV_AUTH=1`）ではセッション cookie をスクリプトが `GET /auth/dev` から取得する。**loopback（localhost / 127.0.0.1 / ::1）以外に `ZEEE_DEV_AUTH=1` を渡してはならない**。`ZEEE_DEV_AUTH` は `void.config.ts` に定義されていない（deploy workflow が `Object.hasOwn(config.vars, 'ZEEE_DEV_AUTH')` でキーの存在自体を拒否する）。ローカルの `dist/.dev.vars` だけで使い、本番ビルド・本番デプロイには絶対に含めない。
 
 ```sh
 ZEEE_BASE_URL='http://127.0.0.1:8787' ZEEE_DEV_AUTH=1 \
@@ -197,20 +218,68 @@ ZEEE_BASE_URL='http://127.0.0.1:8787' ZEEE_DEV_AUTH=1 \
 
 ### Yjs state の復元
 
-`/api/pages/:id/import-state` は移行専用エンドポイント。一時的な移行デプロイでのみ `ZEEE_MIGRATION_IMPORT=1` を設定し、通常の本番ビルドには入れない。無効なデプロイでは 404 になる。
-
-**重要**: import 前にそのページへの WebSocket 接続をすべて切る。接続が残っていると DO が `409 close websockets before importing` を返す（旧クライアントの update と混ざらないための意図的な拒否）。ページを開いているブラウザ・エディタを閉じ、トラフィックを止めてから実行する。409 が解消するまで少し待って再試行してもよい。
+`/api/pages/:id/import-state` は移行専用エンドポイント。`void.config.ts` は `ZEEE_MIGRATION_IMPORT: ''` をハードコードしているので、一時的な移行デプロイではビルド後に `dist/wrangler.json` をパッチして celld から直接デプロイする。**本番 deploy workflow の `workflow_dispatch` は使わない**（本番 config の検証に当たり、PR #42 のガードで失敗する）。完了後は移行デプロイを停止し、通常のビルドに戻す。フラグが `1` でないデプロイでは 404 になる。
 
 ```sh
-for file in "$BACKUP_DIR/state"/*.yjs; do
-  id=$(basename "$file" .yjs)
-  curl --fail-with-body -X POST \
-    -H "Cookie: $ZEEE_SESSION_COOKIE" \
-    -H "Origin: $ZEEE_BASE_URL" \
-    -H 'Content-Type: application/octet-stream' \
-    --data-binary "@$file" \
-    "$ZEEE_BASE_URL/api/pages/$id/import-state"
-done
+pnpm build:celld
+node --input-type=module -e '
+import { readFileSync, writeFileSync } from "node:fs";
+const path = "dist/wrangler.json";
+const config = JSON.parse(readFileSync(path, "utf8"));
+config.vars.ZEEE_MIGRATION_IMPORT = "1";
+writeFileSync(path, `${JSON.stringify(config, null, 2)}\n`);
+'
+celld deploy dist
 ```
 
-`Origin` は `PUBLIC_ORIGIN` と一致させること（不一致なら 403）。1 リクエストあたり最大 5 MiB / 30 秒（超過は 413、不正な update は 400）。すべての試行は `page.state_import` 監査ログに残る。取り込み後は `GET /api/pages/:id/state` が元のバイト列と一致することと、ページ本文が表示されることを確認してから移行デプロイを停止する。
+`dist/wrangler.json` は Git 管理外の一時生成物。パッチした config を本番 deploy に流用しない。
+
+**重要**: import 前にそのページへの WebSocket 接続をすべて切る。接続が残っていると DO が `409 close websockets before importing` を返す（旧クライアントの update と混ざらないための意図的な拒否）。ページを開いているブラウザ・エディタを閉じ、トラフィックを止めてから実行する。
+
+```sh
+set -euo pipefail
+
+# Origin は PUBLIC_ORIGIN と完全一致させる。末尾の / を落とす。
+BASE_URL="${ZEEE_BASE_URL%/}"
+ORIGIN="$BASE_URL"
+FAILURES="$BACKUP_DIR/import-failures.txt"
+: > "$FAILURES"
+
+for file in "$BACKUP_DIR/state"/*.yjs; do
+  [ -e "$file" ] || continue
+  id=$(basename "$file" .yjs)
+  ok=0
+  for attempt in 1 2 3 4; do
+    # 409 を判定するため --fail-with-body は使わず HTTP ステータスを取得する
+    code=$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
+      -X POST \
+      -H "Cookie: $ZEEE_SESSION_COOKIE" \
+      -H "Origin: $ORIGIN" \
+      -H 'Content-Type: application/octet-stream' \
+      --data-binary "@$file" \
+      "$BASE_URL/api/pages/$id/import-state") || {
+        echo "curl error for $id" >&2
+        break
+      }
+    case "$code" in
+      2*) ok=1; break ;;
+      409) sleep "$((attempt * 2))" ;; # WebSocket が残っている場合だけ backoff
+      *) echo "$id: HTTP $code" >&2; break ;;
+    esac
+  done
+  if [ "$ok" -ne 1 ]; then
+    echo "$id" >> "$FAILURES"
+  fi
+done
+
+if [ -s "$FAILURES" ]; then
+  echo "failed imports recorded in $FAILURES" >&2
+  exit 1
+fi
+```
+
+- `409 close websockets before importing` のみ backoff リトライする。401 / 403 / 404 / 400 / 413 はリトライせず失敗として記録する。
+- `set -euo pipefail` で想定外のコマンド失敗を止めつつ、失敗ページは `import-failures.txt` に残して最後に非ゼロ終了する。`--fail-with-body` は 409 判定に必要なステータスコードを隠すので使わない。
+- `ZEEE_BASE_URL` が `/` で終わると `Origin` が `PUBLIC_ORIGIN` と一致せず 403 になる。`${ZEEE_BASE_URL%/}` で除去する。
+
+1 リクエストあたり最大 5 MiB / 30 秒（超過は 413、不正な update は 400）。すべての試行は `page.state_import` 監査ログに残る。取り込み後は `GET /api/pages/:id/state` が元のバイト列と一致することと、ページ本文が表示されることを確認してから移行デプロイを停止する。
