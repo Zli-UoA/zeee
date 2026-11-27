@@ -157,6 +157,26 @@ read-only の Secret mount を追加すること（キーを env に残さない
 
 計測値と障害注入の結果は 30 日間記録し、移行レポートの Go / No-Go ゲート判断に使う。
 
+### 計測の実行例
+
+`scripts/pilot-measure.mjs` は `POST /api/pages/:id/snapshot`（D1 materialize + DO snapshot）を
+繰り返し叩き、レイテンシとエラーを計測する。既定は 20 リクエスト / 並列 1 で、まず dry-run で
+計画だけ確認できる。`--page-id` を省略すると `GET /api/pages?limit=1` から 1 つ選ぶ。
+
+```sh
+node ../../scripts/pilot-measure.mjs --dry-run --target <PILOT_BASE_URL>
+ZEEE_SESSION_COOKIE='<PILOT_SESSION_COOKIE>' \
+  node ../../scripts/pilot-measure.mjs --target <PILOT_BASE_URL> --page-id <PAGE_ID> \
+    --requests 100 --concurrency 8 --label 1-node --out reports/1-node.json
+```
+
+レプリカ数を変えた構成でも `--label` だけ変えて同じコマンドを実行し、`p50` / `p95` / `p99` と
+`errorRate` を比較する。JSON は stdout と `--out` に出力され、進捗は stderr に出る。
+4xx/5xx は例外にせずエラーとして集計し、1 件でもあれば終了コード 1（`--max-error-rate` /
+`--max-p95-ms` で閾値も指定可）。`CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID` / `R2_BUCKET`
+を設定すると、実行前後の Class A 操作数を `classA` に記録する。実トークンや実バケット名は
+リポジトリへ書き戻さないこと。
+
 ## 障害注入リスト
 
 | シナリオ        | 手順の例                                                                                  | 確認点                                                                                                           |
