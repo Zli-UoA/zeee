@@ -11,7 +11,7 @@
 
 1. **買収・統合は事実。しかも「予定」ではなく、すでに workerd に実装が入り始めている。** 2026-10-29 に Ryan Dahl 自身が PR [#7994](https://github.com/cloudflare/workerd/pull/7994) をマージしており、説明文は _"This is the beginning of merging celld's functionality into workerd"_ 。以降約 1 ヶ月で 20 本以上の関連 PR が入り、最新リリースは `workerd@1.20261127.1`（調査日）。
 2. **ただし本番で使える状態ではない。** クラスタモードは今も `--experimental`。書き込みはバケット同期完了まで ACK されず（遅い・S3 課金が重い）、無停止デプロイ（#8155 / #8176）や一部の整合性バグが未解決。**celld も v0.6.3（10/21）で事実上凍結**（PR 受付停止、未解決 issue 104 件）。
-3. **このプロジェクトは「Deno アプリ」ではなく、すでに Workers アプリ。** `Deno.*` は 0 件。D1 + Durable Objects + 静的アセットだけを使い、`nodejs_compat` も実質不要。**アプリコードの移行作業はほぼゼロ**で、作業の 9 割はデプロイ基盤とデータ移行。
+3. **このプロジェクトは「Deno アプリ」ではなく、すでに Workers アプリ。** `Deno.*` は 0 件。D1 + Durable Objects + 静的アセットだけを使い、アプリコードは `node:` に依存しません。ただし `nodejs_compat` は `void.config.ts:38-41` で明示的に有効なため、設定側の互換フラグはそのまま引き継ぐ前提です。**アプリコードの移行作業はほぼゼロ**で、作業の 9 割はデプロイ基盤とデータ移行。
 4. **推奨: 本番を self-hosted workerd に今すぐ載せ替えるのはやめ、段階移行にする。** 今は「本番は celld 継続 or Cloudflare Workers、ローカル / CI は workerd」のハイブリッドにし、1〜3 ヶ月でクラスタのパイロット、6〜12 ヶ月でゲート基準を満たしたら本番カットオーバー。**待つことのコストはほぼゼロ**（Deno Deploy 停止や Deno runtime EOL はこのアプリに直接影響しない）。
 
 ---
@@ -24,7 +24,7 @@
 | **2026-10-09**      | Cloudflare が Deno チーム全体の合流を発表（[Deno blog](https://deno.com/blog/cloudflare) / [Cloudflare blog](https://blog.cloudflare.com/deno-joins-cloudflare/)）。Ryan Dahl + Bert Belder が celld を workerd に統合する新取り組みをリード  |
 | 10-09 時点の予定    | Deno runtime: 1 年間の月次バグ修正 / セキュリティ修正の後、開発終了（OSS は残る）。Deno Deploy: 6 ヶ月後に停止（≈2027-04-09）、有料顧客は Workers へ移行支援。JSR: 継続（インフラは Cloudflare へ）。rusty_v8: 継続支援＋workerd 統合を目指す |
 | 2026-10-21          | celld **v0.6.3** が最後のリリース。以降 `main` にコミットなし。beta のまま、PR は停止（パッチはメール提出）                                                                                                                                   |
-| 2026-10-24          | Cloudflare Connect のセッションで「nascent plans」。GA 日付の発表なし                                                                                                                                                                         |
+| 2026-10-24          | [Cloudflare Connect 2026 セッション](https://cloudflare.com/connect/2026/session/self-hosting-durable-objects)で「nascent plans」。GA 日付の発表なし                                                                                          |
 | **2026-10-26 → 29** | workerd PR #7994 がマージ。**クラスタモードの実装が workerd に入る**                                                                                                                                                                          |
 | 11 月               | クラスタ関連 PR が連続マージ（§2）                                                                                                                                                                                                            |
 | 2026-11-25          | Kubernetes サンプル (#8274) がマージ（3 Pod、DO ハンドオフ、RustFS バケット代替）                                                                                                                                                             |
@@ -40,7 +40,7 @@ PR #7994 の実装（一次本文確認済み）:
 
 - 複数 workerd プロセスが **同一の S3 互換バケット** を見ることでクラスタを形成 (`Config.cluster`, `--experimental`)
 - **各 Durable Object は常に 1 オーナー**。任意のノードがリクエストを受け取り、オーナー死亡時は別ノードがバケットから引き継ぐ
-- コミットログは **Cap'n Proto フレーム (`frames.capnp`)**。celld の LTX と概念は同じだが形式は別（workerd 側は Litestream のアルゴリズム / フォーマットを採用）
+- コミットログは **SQLite ページを格納した Cap'n Proto フレーム (`frames.capnp`、各ファイルは LZ4 圧縮)**。LTX 形式ではなく、コミット [89703de](https://github.com/cloudflare/workerd/commit/89703de) で "log commits as Cap'n Proto frames of pages, not LTX" とされ、LTX の k-way merge を置き換えた。PR 初期説明にあった「Litestream のアルゴリズム / フォーマットを採用」はマージ前に置換済み。**Litestream / LTX 由来の設計は celld 側**（§3.3 の LTX epoch を参照）
 - 起動: `workerd serve --experimental config.capnp --cluster-addr 10.0.0.1:7000`
 - **作者自身の但し書き**: _"an object acknowledges a write only once it is fully synced to the bucket; that is much too slow and expensive for most uses"_
 
@@ -107,7 +107,7 @@ PR #7994 の実装（一次本文確認済み）:
    - 救い: `GET /api/pages/:id/state` が生の Yjs update (`application/octet-stream`) を返す（`durable-objects/page-room.ts:91-100`）ので、**エクスポート用フックは既にある**
    - 問題: 現在の `/replace` は Markdown のみを受け付け（同 `:259-293`）。これで取り込むと **Yjs のクライアント ID / undo 履歴を失う**。生 update を適用する一時インポートエンドポイントを足すか、「Markdown を正とみなして履歴は捨てる」と明示的に割り切る必要がある
 2. **DO のアイデンティティ罠。** ID は (deployment 名, クラス名, storage key)。workerd クラスタではさらに deployment 名が `uniqueKey` に入ります。**名前を変えると DO が空から始まる（黙ってデータが消える）**。`zeee` / `PageRoomDurableObject` / migration tag は絶対に維持する
-3. **D1 の FTS5 仮想テーブル。** エクスポートは 2026-11-12 の改善で可能になったが、そのダンプの**インポートは依然非対応**。論理エクスポート → インポート → `page_fts` を `page_body` から再構築、のリハーサルが必須。加えて hosted D1 は LIKE パターンが 50 バイト制限なのに `src/server/db.ts:781,819` の `searchPages` は最大 500 文字を許す — 日本語 7 文字以上で LIKE フォールバックが例外を投げ得る（FTS 側は無影響）
+3. **D1 の FTS5 仮想テーブル。** エクスポートは 2026-11-12 の改善で可能になったが、そのダンプの**インポートは依然非対応**。論理エクスポート → インポート → `page_fts` を `page_body` から再構築、のリハーサルが必須。加えて hosted D1 は LIKE パターンが 50 バイト制限（[D1 Limits](https://developers.cloudflare.com/d1/platform/limits/)）なのに `src/server/db.ts:781,819` の `searchPages` は最大 500 文字を許す — 日本語は 3 バイト/文字 + 前後の `%` 2 バイトなので 16 文字（50 バイト）は通過し、**17 文字以上（53 バイト〜）**で LIKE フォールバックが例外を投げ得る（FTS 側は無影響）。ただし `src/server/db.ts:785` が `Array.from(trimmed).length >= 3` で FTS を先行させるため、FTS が利用できる通常環境では LIKE には到達しない。
 4. **絵文字アカウント URL。** `void.config.ts:25-27` の celld ビルド既定値は `http://emoji.emoji.svc.cluster.local:3001/accounts` で、`docs/account-emojis.md:7` も「単体 Cloudflare Worker からは接続不可」と明記。移行先で `EMOJI_ACCOUNT_PROFILE_URL` を到達可能な値に設定し直す必要がある
 5. **WebSocket の切断。** ローリング再起動・DO 移動で 1012 が飛ぶ。クライアント (`src/client/provider.ts:126-220`) は再接続＋IndexedDB outbox を持つので耐性はあるが、無停止デプロイが solve されるまでは切替タイミングを低トラフィック時に取る
 
@@ -161,7 +161,7 @@ PR #7994 の実装（一次本文確認済み）:
 
 - `cloudflare/workerd` の [cluster issues / PRs](https://github.com/cloudflare/workerd/pulls?q=is%3Apr+is%3Amerged+cluster+created%3A%3E2026-10-20)、#8155 / #8176、README、npm リリース、コンテナイメージ
 - Cloudflare blog / Kenton Varda / Ryan Dahl、Connect 2027
-- `denoland/celld` の README（workerd 指向のアナウンス）と issue #267
+- `denoland/celld` の README（PR 停止の確認用。workerd 指向のアナウンスは README にはなし）と issue #267。統合のアナウンスは Cloudflare blog と Connect 2026 セッションを監視
 
 ---
 
@@ -175,6 +175,8 @@ workerd は**ランタイムであってプラットフォームではありま�
 
 - https://deno.com/blog/cloudflare （2026-10-09）
 - https://blog.cloudflare.com/deno-joins-cloudflare/ （2026-10-09）
+- https://cloudflare.com/connect/2026/session/self-hosting-durable-objects （Ryan Dahl、2026-10-24）
+- https://developers.cloudflare.com/d1/platform/limits/ （LIKE / GLOB パターンの 50 バイト制限）
 - https://github.com/cloudflare/workerd/pull/7994 （cluster 実装、2026-10-26 → 29）
 - https://github.com/cloudflare/workerd/blob/main/README.md
 - https://github.com/cloudflare/workerd/releases/tag/v1.20261127.1
