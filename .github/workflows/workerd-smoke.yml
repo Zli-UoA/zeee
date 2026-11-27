@@ -1,0 +1,41 @@
+name: workerd smoke
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: workerd-smoke-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  workerd-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12.16.1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.11.0
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm build:celld
+
+      # The workerd version in the lockfile (1.20261023.1) cannot parse
+      # wrangler.json; 1.20261127.1 can, so the smoke script uses that via npx.
+      # It is a smoke test only and does not add a project dependency.
+      - name: Boot dist/wrangler.json with workerd and probe /api/health
+        run: bash scripts/workerd-smoke.sh
