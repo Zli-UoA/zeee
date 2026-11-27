@@ -160,22 +160,31 @@ read-only の Secret mount を追加すること（キーを env に残さない
 ### 計測の実行例
 
 `scripts/pilot-measure.mjs` は `POST /api/pages/:id/snapshot`（D1 materialize + DO snapshot）を
-繰り返し叩き、レイテンシとエラーを計測する。既定は 20 リクエスト / 並列 1 で、まず dry-run で
-計画だけ確認できる。`--page-id` を省略すると `GET /api/pages?limit=1` から 1 つ選ぶ。
+繰り返し叩き、レイテンシとエラーを計測する。**既定では送信せず dry-run の計画だけを表示する**。
+実ページを更新するリクエストを送るには `--confirm` が必須で、実行前に警告を出す。要求数は
+既定 20 リクエスト / 並列 1。`--page-id` を省略すると `GET /api/pages?limit=1` から 1 つ選ぶが、
+ホスト名だけでなく URL 全体と page id に `prod` / `zeee` / `main` / `master` / `default`
+が含まれる場合は拒否する（誤って本番を更新しないためのガード）。
 
 ```sh
-node ../../scripts/pilot-measure.mjs --dry-run --target <PILOT_BASE_URL>
+# まずは計画だけを確認（HTTP リクエストなし）
+node ../../scripts/pilot-measure.mjs --target <PILOT_BASE_URL> --page-id <PAGE_ID>
+
+# 実行する場合のみ --confirm を付ける（非本番パイロット専用）
 ZEEE_SESSION_COOKIE='<PILOT_SESSION_COOKIE>' \
   node ../../scripts/pilot-measure.mjs --target <PILOT_BASE_URL> --page-id <PAGE_ID> \
-    --requests 100 --concurrency 8 --label 1-node --out reports/1-node.json
+    --confirm --requests 100 --concurrency 8 --label 1-node --out reports/1-node.json
 ```
 
 レプリカ数を変えた構成でも `--label` だけ変えて同じコマンドを実行し、`p50` / `p95` / `p99` と
-`errorRate` を比較する。JSON は stdout と `--out` に出力され、進捗は stderr に出る。
-4xx/5xx は例外にせずエラーとして集計し、1 件でもあれば終了コード 1（`--max-error-rate` /
-`--max-p95-ms` で閾値も指定可）。`CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID` / `R2_BUCKET`
-を設定すると、実行前後の Class A 操作数を `classA` に記録する。実トークンや実バケット名は
-リポジトリへ書き戻さないこと。
+`errorRate` を比較する。JSON は stdout と `--out` に出力され、進捗と警告は stderr に出る。
+4xx/5xx は例外にせず `errorRate` / `statusCounts` に集計するが、**エラーだけで終了コードは
+変わらない**。失敗と判定するには `--max-error-rate` / `--max-p95-ms` で閾値を指定する
+（閾値は四捨五入前のエラー率で比較）。閾値違反（`violations`）がある場合のみ終了コード 1。
+`CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID` / `R2_BUCKET` を設定すると、実行前後の
+Class A 操作数を `classA` に記録する。Cloudflare GraphQL では `bucketName` / `datetime_geq`
+で絞り、`actionType` が Class A（PutObject 等）のグループだけ合算し、GetObject などの
+Class B は除外する。実トークンや実バケット名はリポジトリへ書き戻さないこと。
 
 ## 障害注入リスト
 

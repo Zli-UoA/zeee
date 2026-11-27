@@ -10,6 +10,7 @@ const {
   evaluateThresholds,
   fetchClassACount,
   main,
+  normalizeBaseUrl,
   parseArgs,
   percentile,
   runMeasurement,
@@ -59,8 +60,10 @@ describe('pilot-measure', () => {
     expect(parseArgs(['--dry-run'])).toMatchObject({
       requests: 20,
       concurrency: 1,
+      confirm: false,
       dryRun: true,
     });
+    expect(parseArgs(['--confirm'])).toMatchObject({ confirm: true, dryRun: false });
     const args = parseArgs([
       '--target=https://pilot.example.test',
       '--requests=3',
@@ -79,6 +82,23 @@ describe('pilot-measure', () => {
     expect(args.label).toBe('1-node');
     expect(() => parseArgs(['--requests=0'])).toThrow(/positive integer/);
     expect(() => parseArgs(['--max-error-rate=1.5'])).toThrow(/between 0 and 1/);
+  });
+
+  it('rejects production-looking hosts and paths before any request', () => {
+    expect(normalizeBaseUrl('https://pilot.example.test').origin).toBe(
+      'https://pilot.example.test',
+    );
+    for (const target of [
+      'https://prod.example.test',
+      'https://zeee.example.test',
+      'https://main.example.test',
+      'https://master.example.test',
+      'https://default.example.test',
+      'https://pilot.example.test/prod/api',
+      'https://pilot.example.test?redirect=https://prod.example.test',
+    ]) {
+      expect(() => normalizeBaseUrl(target), target).toThrow(/non-pilot/);
+    }
   });
 
   it('computes p50/p95/p99 with linear interpolation over an unsorted input', () => {
@@ -184,6 +204,35 @@ describe('pilot-measure', () => {
     expect(result.pageId).toBe('discovered-page');
   });
 
+  it('rejects production-looking page ids, including ids discovered from the list', async () => {
+    const { fetchImpl, calls } = mockFetch(() => new Response(null, { status: 200 }));
+    await expect(
+      runMeasurement({
+        target: 'https://pilot.example.test',
+        pageId: 'prod-page',
+        requests: 1,
+        cookie: 'zeee_session=test-token',
+        fetchImpl,
+        env: {},
+      }),
+    ).rejects.toThrow(/non-pilot/);
+    expect(calls).toHaveLength(0);
+
+    const discovered = mockFetch((url) =>
+      url.pathname === '/api/pages' ? pageList(['prod-page']) : new Response(null, { status: 200 }),
+    );
+    await expect(
+      runMeasurement({
+        target: 'https://pilot.example.test',
+        requests: 1,
+        cookie: 'zeee_session=test-token',
+        fetchImpl: discovered.fetchImpl,
+        env: {},
+      }),
+    ).rejects.toThrow(/non-pilot/);
+    expect(discovered.calls).toHaveLength(1); // only the list request; no snapshot POST
+  });
+
   it('honours --concurrency and counts 4xx/5xx/network errors without throwing', async () => {
     const clock = fakeClock();
     let inFlight = 0;
@@ -240,6 +289,40 @@ describe('pilot-measure', () => {
     expect(result.plan).toMatchObject({ requests: 5, concurrency: 1, pageFromList: true });
   });
 
+  it('defaults to dry-run and requires --confirm before sending any write', async () => {
+    const logs: string[] = [];
+    const { fetchImpl, calls } = mockFetch(() => new Response(null, { status: 200 }));
+    const result = await main(
+      ['--target=https://pilot.example.test', '--page-id=page-1', '--requests=2'],
+      {
+        env: { ZEEE_SESSION_COOKIE: 'zeee_session=test-token' },
+        fetchImpl,
+        log: (message: string) => logs.push(message),
+        emit: () => {},
+        setExitCode: () => {},
+      },
+    );
+
+    expect(result.dryRun).toBe(true);
+    expect(calls).toHaveLength(0);
+    expect(logs.join('\n')).toMatch(/pass --confirm to execute/);
+
+    logs.length = 0;
+    const confirmed = await main(
+      ['--target=https://pilot.example.test', '--page-id=page-1', '--requests=2', '--confirm'],
+      {
+        env: { ZEEE_SESSION_COOKIE: 'zeee_session=test-token' },
+        fetchImpl,
+        log: (message: string) => logs.push(message),
+        emit: () => {},
+        setExitCode: () => {},
+      },
+    );
+    expect(confirmed.dryRun).toBe(false);
+    expect(calls).toHaveLength(2);
+    expect(logs.join('\n')).toMatch(/WARNING: --confirm/);
+  });
+
   it('writes JSON to stdout and --out, and sets a non-zero exit code on errors', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'zeee-pilot-'));
     try {
@@ -252,7 +335,15 @@ describe('pilot-measure', () => {
       let emitted = '';
       let exitCode: number | null = null;
       const result = await main(
-        ['--target=https://pilot.example.test', '--page-id=page-1', '--requests=2', '--out', out],
+        [
+          '--target=https://pilot.example.test',
+          '--page-id=page-1',
+          '--requests=2',
+          '--max-error-rate=0',
+          '--confirm',
+          '--out',
+          out,
+        ],
         {
           env: { ZEEE_SESSION_COOKIE: 'zeee_session=test-token' },
           fetchImpl,
@@ -269,6 +360,7 @@ describe('pilot-measure', () => {
       );
 
       expect(result.summary.errors).toBe(2);
+      expect(result.violations).toEqual(['error rate 1 > 0']);
       expect(JSON.parse(emitted)).toMatchObject({
         schemaVersion: 1,
         summary: { requests: 2, errors: 2, errorRate: 1 },
@@ -288,7 +380,13 @@ describe('pilot-measure', () => {
     });
     let exitCode: number | null = null;
     const result = await main(
-      ['--target=https://pilot.example.test', '--page-id=page-1', '--requests=2', '--max-p95-ms=5'],
+      [
+        '--target=https://pilot.example.test',
+        '--page-id=page-1',
+        '--requests=2',
+        '--max-p95-ms=5',
+        '--confirm',
+      ],
       {
         env: { ZEEE_SESSION_COOKIE: 'zeee_session=test-token' },
         fetchImpl,
@@ -306,6 +404,55 @@ describe('pilot-measure', () => {
     expect(exitCode).toBe(1);
   });
 
+  it('does not fail on errors alone, and compares the unrounded error rate', async () => {
+    async function runWithErrors(total: number, errors: number, maxErrorRate?: number) {
+      const clock = fakeClock();
+      let count = 0;
+      const { fetchImpl } = mockFetch(() => {
+        clock.advance(10);
+        count += 1;
+        return count <= errors
+          ? new Response('down', { status: 500 })
+          : new Response(null, { status: 200 });
+      });
+      let exitCode: number | null = null;
+      const args = ['--target=https://pilot.example.test', '--page-id=page-1', '--confirm'];
+      args.push(`--requests=${total}`);
+      if (maxErrorRate !== undefined) args.push(`--max-error-rate=${maxErrorRate}`);
+      const result = await main(args, {
+        env: { ZEEE_SESSION_COOKIE: 'zeee_session=test-token' },
+        fetchImpl,
+        now: clock.now,
+        log: () => {},
+        emit: () => {},
+        setExitCode: (code: number) => {
+          exitCode = code;
+        },
+      });
+      return { result, exitCode };
+    }
+
+    const accepted = await runWithErrors(5, 1); // 20% errors
+    expect(accepted.result.summary.errorRate).toBe(0.2);
+    expect(accepted.result.violations).toEqual([]);
+    expect(accepted.exitCode).toBeNull();
+
+    const withinThreshold = await runWithErrors(5, 1, 0.25);
+    expect(withinThreshold.result.violations).toEqual([]);
+    expect(withinThreshold.exitCode).toBeNull();
+
+    // 1/3 = 0.3333... which rounds to 0.333 in the report: the threshold must
+    // be compared with the raw value, not the rounded report field.
+    const overThreshold = await runWithErrors(3, 1, 0.333);
+    expect(overThreshold.result.summary.errorRate).toBe(0.333);
+    expect(overThreshold.result.violations).toEqual(['error rate 0.333333 > 0.333']);
+    expect(overThreshold.exitCode).toBe(1);
+
+    const belowThreshold = await runWithErrors(3, 1, 0.334);
+    expect(belowThreshold.result.violations).toEqual([]);
+    expect(belowThreshold.exitCode).toBeNull();
+  });
+
   it('fetches and aggregates R2 Class A counts through an injectable fetch', async () => {
     const { fetchImpl, calls } = mockFetch(() =>
       Response.json({
@@ -313,7 +460,28 @@ describe('pilot-measure', () => {
           viewer: {
             accounts: [
               {
-                r2OperationsAdaptiveGroups: [{ sum: { requests: 7 } }, { sum: { requests: 3 } }],
+                r2OperationsAdaptiveGroups: [
+                  {
+                    sum: { requests: 7 },
+                    dimensions: { actionType: 'PutObject', bucketName: 'pilot-bucket' },
+                  },
+                  {
+                    sum: { requests: 300 }, // Class B: must be excluded
+                    dimensions: { actionType: 'GetObject', bucketName: 'pilot-bucket' },
+                  },
+                  {
+                    sum: { requests: 50 }, // Class B: must be excluded
+                    dimensions: { actionType: 'HeadObject', bucketName: 'pilot-bucket' },
+                  },
+                  {
+                    sum: { requests: 3 },
+                    dimensions: {
+                      actionType: 'CompleteMultipartUpload',
+                      bucketName: 'pilot-bucket',
+                    },
+                  },
+                  { sum: { requests: 99 } }, // no actionType dimension: not counted
+                ],
               },
             ],
           },
@@ -332,12 +500,20 @@ describe('pilot-measure', () => {
     expect(count).toBe(10);
     expect(calls[0].url.toString()).toBe('https://api.cloudflare.com/client/v4/graphql');
     expect(headers(calls[0]).authorization).toBe('Bearer fake-token');
-    expect(JSON.parse(calls[0].init.body as string).variables).toEqual({
+    const body = JSON.parse(calls[0].init.body as string);
+    expect(body.variables).toEqual({
       accountId: 'fake-account',
       bucket: 'pilot-bucket',
       from: '2026-01-01T00:00:00.000Z',
       to: '2026-01-01T00:01:00.000Z',
     });
+    // Guard against regressions to fields the real Cloudflare schema rejects.
+    expect(body.query).toMatch(/bucketName:\s*\$bucket/);
+    expect(body.query).toMatch(/datetime_geq:\s*\$from/);
+    expect(body.query).toMatch(/datetime_lt:\s*\$to/);
+    expect(body.query).toMatch(/dimensions\s*\{\s*actionType\s+bucketName\s*\}/);
+    expect(body.query).not.toMatch(/\bclass\s*:/);
+    expect(body.query).not.toMatch(/datetime_ge\s*:/);
     expect(summarizeClassA(10, 13)).toEqual({
       operationClass: 'A',
       before: 10,
@@ -368,7 +544,20 @@ describe('pilot-measure', () => {
         return Response.json({
           data: {
             viewer: {
-              accounts: [{ r2OperationsAdaptiveGroups: [{ sum: { requests: count } }] }],
+              accounts: [
+                {
+                  r2OperationsAdaptiveGroups: [
+                    {
+                      sum: { requests: count },
+                      dimensions: { actionType: 'PutObject', bucketName: 'pilot-bucket' },
+                    },
+                    {
+                      sum: { requests: 1000 }, // Class B group must not affect the delta
+                      dimensions: { actionType: 'GetObject', bucketName: 'pilot-bucket' },
+                    },
+                  ],
+                },
+              ],
             },
           },
         });

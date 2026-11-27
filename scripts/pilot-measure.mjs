@@ -8,14 +8,32 @@ const DEFAULT_REQUESTS = 20;
 const DEFAULT_CONCURRENCY = 1;
 const DEFAULT_TIMEOUT_MS = 30_000;
 const SAFE_PAGE_ID = /^[A-Za-z0-9_-]{1,128}$/;
+const UNSAFE_NAME_PARTS = ['prod', 'zeee', 'main', 'master', 'default'];
+// Cloudflare R2 Class A action types. GetObject/HeadObject (Class B) must not
+// be counted. Query dimensions are grouped by actionType, so only these groups
+// are summed.
+const CLASS_A_ACTION_TYPES = new Set([
+  'PutObject',
+  'CopyObject',
+  'ListObjects',
+  'CreateMultipartUpload',
+  'CompleteMultipartUpload',
+  'UploadPart',
+  'UploadPartCopy',
+  'ListParts',
+  'ListBuckets',
+  'PutBucket',
+]);
 const R2_GRAPHQL_ENDPOINT = 'https://api.cloudflare.com/client/v4/graphql';
 const R2_WINDOW_MS = 60_000;
 
 export const HELP = `Usage: node scripts/pilot-measure.mjs --target <baseUrl> [options]
 
 Measure POST /api/pages/:id/snapshot (D1 materialize + DO snapshot) latency.
-Only a small number of requests are sent by default; use --dry-run to plan
-without touching a deployment at all.
+NOTHING is sent by default: without --confirm this only prints a dry-run plan.
+--confirm sends real snapshot POSTs (default: ${DEFAULT_REQUESTS} requests), so use it
+ONLY against a non-production pilot deployment. Targets whose host or path
+contains prod / zeee / main / master / default are rejected as a safety guard.
 
 Env:
   ZEEE_BASE_URL              Base URL (alternative to --target)
@@ -25,7 +43,7 @@ Env:
   R2_BUCKET                    the run via the Cloudflare GraphQL API.
 
 Options:
-  --target <url>            Deployment base URL (http/https; required unless --dry-run)
+  --target <url>            Deployment base URL (http/https; required with --confirm)
   --page-id <id>            Page to snapshot (otherwise GET /api/pages?limit=1)
   --requests <n>            Number of requests (default: ${DEFAULT_REQUESTS})
   --concurrency <n>         Parallel workers (default: ${DEFAULT_CONCURRENCY})
@@ -35,7 +53,8 @@ Options:
   --label <name>            Run label, e.g. "1-node" or "3-node"
   --max-error-rate <f>      Fail if error rate > f (0..1)
   --max-p95-ms <n>          Fail if p95 latency > n ms
-  --dry-run                 Print the plan only; no HTTP requests
+  --confirm                 Execute the requests (required for any HTTP writes)
+  --dry-run                 Force a dry-run plan even together with --confirm
   --help                    Show this help
 `;
 
@@ -59,6 +78,7 @@ export function parseArgs(argv) {
     label: null,
     maxErrorRate: null,
     maxP95Ms: null,
+    confirm: false,
     dryRun: false,
     help: false,
   };
@@ -83,6 +103,7 @@ export function parseArgs(argv) {
     const inline = eq === -1 ? undefined : arg.slice(eq + 1);
     const value = () => (inline === undefined ? valueAt(++i, name) : inline);
     if (name === '--help' || name === '-h') parsed.help = true;
+    else if (name === '--confirm') parsed.confirm = true;
     else if (name === '--dry-run') parsed.dryRun = true;
     else if (name === '--target') parsed.target = value();
     else if (name === '--page-id') parsed.pageId = value();
@@ -107,6 +128,17 @@ export function parseArgs(argv) {
   return parsed;
 }
 
+/** Reject production-looking names before any request is sent. */
+export function assertSafeTarget(label, value) {
+  if (typeof value !== 'string' || value.trim() === '') return;
+  const lowered = value.toLowerCase();
+  const unsafe = UNSAFE_NAME_PARTS.find((part) => lowered.includes(part));
+  if (unsafe !== undefined) {
+    // Do not echo the value: it may contain a token in a query string.
+    throw new MeasureError(`${label} looks non-pilot (contains "${unsafe}")`);
+  }
+}
+
 export function normalizeBaseUrl(value) {
   let url;
   try {
@@ -117,6 +149,9 @@ export function normalizeBaseUrl(value) {
   if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) {
     throw new MeasureError('--target must be an http(s) URL without credentials');
   }
+  // Check the whole URL (host AND path), not just the hostname: a pilot-looking
+  // host with a production-looking path (e.g. /prod) must be rejected too.
+  assertSafeTarget('--target', url.href);
   return url;
 }
 
@@ -181,8 +216,10 @@ export function summarizeMeasurements(samples, { elapsedMs = 0 } = {}) {
 
 export function evaluateThresholds(summary, { maxErrorRate, maxP95Ms } = {}) {
   const violations = [];
-  if (maxErrorRate != null && summary.errorRate > maxErrorRate) {
-    violations.push(`error rate ${summary.errorRate} > ${maxErrorRate}`);
+  // Compare the unrounded rate: summary.errorRate is a report-only value.
+  const rawErrorRate = summary.requests > 0 ? summary.errors / summary.requests : 0;
+  if (maxErrorRate != null && rawErrorRate > maxErrorRate) {
+    violations.push(`error rate ${round(rawErrorRate, 6)} > ${maxErrorRate}`);
   }
   if (maxP95Ms != null && summary.latencyMs?.p95 > maxP95Ms) {
     violations.push(`p95 latency ${summary.latencyMs.p95}ms > ${maxP95Ms}ms`);
@@ -205,6 +242,7 @@ export async function resolvePageId(options) {
     if (typeof pageId !== 'string' || !SAFE_PAGE_ID.test(pageId)) {
       throw new MeasureError('invalid --page-id');
     }
+    assertSafeTarget('page id', pageId);
     log(`using page id ${pageId}`);
     return pageId;
   }
@@ -234,6 +272,7 @@ export async function resolvePageId(options) {
   if (typeof id !== 'string' || !SAFE_PAGE_ID.test(id)) {
     throw new MeasureError(`GET ${PAGE_LIST_PATH}: no valid page id in response`);
   }
+  assertSafeTarget('discovered page id', id);
   log(`using page id ${id} from ${PAGE_LIST_PATH}`);
   return id;
 }
@@ -287,11 +326,11 @@ const CLASS_A_QUERY = `
     viewer {
       accounts(filter: { accountTag: $accountId }) {
         r2OperationsAdaptiveGroups(
-          filter: { bucket: $bucket, class: "A", datetime_ge: $from, datetime_lt: $to }
+          filter: { bucketName: $bucket, datetime_geq: $from, datetime_lt: $to }
           limit: 10000
         ) {
           sum { requests }
-          dimensions { bucket class }
+          dimensions { actionType bucketName }
         }
       }
     }
@@ -339,7 +378,12 @@ export async function fetchClassACount(options) {
   if (!Array.isArray(groups)) {
     throw new MeasureError('R2 analytics: missing r2OperationsAdaptiveGroups');
   }
-  return groups.reduce((total, group) => total + (Number(group?.sum?.requests) || 0), 0);
+  return groups.reduce((total, group) => {
+    // Class is not a queryable dimension; R2 reports it via actionType. Skip
+    // Class B groups (GetObject/HeadObject/...) instead of summing everything.
+    if (!CLASS_A_ACTION_TYPES.has(group?.dimensions?.actionType)) return total;
+    return total + (Number(group?.sum?.requests) || 0);
+  }, 0);
 }
 
 /** Pure before/after aggregation for the Class A comparison. */
@@ -510,20 +554,35 @@ export async function main(argv = process.argv.slice(2), dependencies = {}) {
     log(HELP);
     return null;
   }
+  // Executing writes always requires an explicit --confirm. Without it (or
+  // with --dry-run) only a plan is printed, even if a target and cookie exist.
+  const dryRun = options.dryRun || !options.confirm;
   const target = options.target ?? env.ZEEE_BASE_URL ?? null;
+  // Validate the target (including the whole URL guard) before any request.
+  const targetUrl = target == null ? null : normalizeBaseUrl(target);
   const cookie = options.sessionCookie ?? env.ZEEE_SESSION_COOKIE ?? '';
-  if (!options.dryRun && !target) {
+  if (!dryRun && !target) {
     throw new MeasureError('--target (or ZEEE_BASE_URL) is required');
   }
-  if (!options.dryRun && !cookie) {
+  if (!dryRun && !cookie) {
     throw new MeasureError(
       '--session-cookie (or ZEEE_SESSION_COOKIE) is required for snapshot requests',
+    );
+  }
+  if (dryRun) {
+    log('[dry-run] no HTTP requests will be sent (pass --confirm to execute)');
+  } else {
+    log(
+      `WARNING: --confirm: sending ${options.requests} real POST /api/pages/:id/snapshot ` +
+        `request(s) to ${targetUrl.origin}. This writes to the deployment; use only ` +
+        'against a non-production pilot.',
     );
   }
 
   const result = await runMeasurement({
     ...options,
     target,
+    dryRun,
     cookie,
     env,
     fetchImpl,
@@ -535,7 +594,9 @@ export async function main(argv = process.argv.slice(2), dependencies = {}) {
   emit(json);
   if (options.out) await writeFileImpl(options.out, json);
 
-  if (!result.dryRun && (result.summary.errors > 0 || result.violations.length > 0)) {
+  // Errors are reported but do not fail the run by themselves: use
+  // --max-error-rate to decide what error rate is unacceptable.
+  if (!result.dryRun && result.violations.length > 0) {
     setExitCode(1);
   }
   return result;
