@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vite-plus/test';
-import { clampLikePattern, searchPages } from '../src/server/db';
+import { clampLikePattern, clampLikeText, searchPages } from '../src/server/db';
 import { ensureSchema } from '../src/server/schema';
 import { sqliteD1 } from './helpers/d1';
 
@@ -77,6 +77,35 @@ describe('clampLikePattern', () => {
     expect(
       byteLength(clampLikePattern('あ'.repeat(100), Number.POSITIVE_INFINITY)),
     ).toBeLessThanOrEqual(44);
+  });
+
+  it("caps an oversized maxBytes at D1's 50-byte limit", () => {
+    const japanese = clampLikePattern('あ'.repeat(100), 100);
+    const ascii = clampLikePattern('a'.repeat(100), 100);
+
+    expect(japanese).toBe(`%${'あ'.repeat(16)}%`); // 16 * 3 + 2 = 50 bytes
+    expect(byteLength(japanese)).toBe(50);
+    expect(ascii).toBe(`%${'a'.repeat(48)}%`);
+    expect(byteLength(ascii)).toBe(50);
+  });
+
+  it('never exceeds a requested budget smaller than the two wildcards', () => {
+    expect(clampLikePattern('あいう', 0)).toBe('');
+    expect(clampLikePattern('あいう', 1)).toBe('%');
+    expect(clampLikePattern('あいう', -4)).toBe('');
+    expect(byteLength(clampLikePattern('あいう', 0))).toBeLessThanOrEqual(0);
+    expect(byteLength(clampLikePattern('あいう', 1))).toBeLessThanOrEqual(1);
+  });
+});
+
+describe('clampLikeText', () => {
+  it('escapes each character before counting bytes and keeps escapes intact', () => {
+    const escape = (char: string) => char.replace(/[\\%_]/g, '\\$&');
+
+    // 12 Japanese bytes (4 chars) + escaped `%` (2 bytes) = 14 bytes.
+    expect(clampLikeText('あいうえ%_%', 14, escape)).toBe('あいうえ\\%');
+    expect(byteLength(clampLikeText('あいうえ%_%', 14, escape))).toBe(14);
+    expect(clampLikeText('あいうえ%_%', 14, escape).endsWith('\\')).toBe(false);
   });
 });
 

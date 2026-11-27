@@ -3,7 +3,18 @@ import { listBacklinks } from '../src/server/backlinks';
 
 type QueryResult = { results?: unknown[]; first?: unknown };
 
-function database(handler: (sql: string, args: unknown[]) => QueryResult): D1Database {
+const encoder = new TextEncoder();
+
+function byteLength(value: string): number {
+  return encoder.encode(value).byteLength;
+}
+
+// Hosted D1 rejects LIKE patterns longer than 50 bytes; the mock can enforce
+// the same limit so the regression would fail the way production would.
+function database(
+  handler: (sql: string, args: unknown[]) => QueryResult,
+  maxLikeBytes?: number,
+): D1Database {
   const calls: { sql: string; args: unknown[] }[] = [];
   const db = {
     calls,
@@ -14,6 +25,13 @@ function database(handler: (sql: string, args: unknown[]) => QueryResult): D1Dat
       let args: unknown[] = [];
       const statement = {
         bind(...values: unknown[]) {
+          if (sql.includes('LIKE ?') && maxLikeBytes !== undefined) {
+            for (const value of values) {
+              if (typeof value === 'string' && byteLength(value) > maxLikeBytes) {
+                throw new Error('LIKE pattern exceeds the D1 byte limit');
+              }
+            }
+          }
           args = values;
           calls.push({ sql, args });
           return statement;
@@ -166,5 +184,60 @@ describe('listBacklinks', () => {
 
     const backlinks = await listBacklinks(db, 'current');
     expect(backlinks).toHaveLength(20);
+  });
+
+  it('keeps short titles byte-for-byte compatible with the old LIKE pattern', async () => {
+    const db = database((sql) => {
+      if (sql.includes('FROM page_alias')) return { results: [] };
+      if (sql.includes('SELECT title FROM page')) return { first: { title: 'Zeee の使い方' } };
+      return { results: [] };
+    }) as D1Database & { calls: { sql: string; args: unknown[] }[] };
+
+    await listBacklinks(db, 'current');
+
+    const candidate = db.calls.find(
+      (call) => call.sql.includes('FROM page p') && call.sql.includes('markdown LIKE'),
+    );
+    expect(candidate?.args[1]).toBe('%[[%Zeee の使い方%');
+    expect(byteLength(candidate?.args[1] as string)).toBeLessThanOrEqual(50);
+  });
+
+  it("clamps a long Japanese title to D1's byte limit and still finds its backlinks", async () => {
+    const title = 'あ'.repeat(16); // 48 bytes; 53 bytes once the LIKE wrapper is included.
+    const db = database((sql) => {
+      if (sql.includes('FROM page_alias')) return { results: [] };
+      if (sql.includes('SELECT title FROM page')) return { first: { title } };
+      return { results: [row('a', 'A', `前 [[${title}]] 後`, 300)] };
+    }, 50) as D1Database & { calls: { sql: string; args: unknown[] }[] };
+
+    const backlinks = await listBacklinks(db, 'current');
+
+    expect(backlinks.map((backlink) => backlink.id)).toEqual(['a']);
+    expect(backlinks[0].excerpt).toContain(title);
+    const candidate = db.calls.find(
+      (call) => call.sql.includes('FROM page p') && call.sql.includes('markdown LIKE'),
+    );
+    const pattern = candidate?.args[1] as string;
+    expect(pattern).toBe(`%[[%${'あ'.repeat(13)}%`); // 4 + 39 + 1 = 44 bytes
+    expect(byteLength(pattern)).toBeLessThanOrEqual(50);
+  });
+
+  it('does not split an escape sequence when clamping a long alias', async () => {
+    const alias = `${'あ'.repeat(12)}${'%'.repeat(20)}`;
+    const db = database((sql) => {
+      if (sql.includes('FROM page_alias')) return { results: [{ alias }] };
+      if (sql.includes('SELECT title FROM page')) return { first: { title: 'Current Title' } };
+      return { results: [] };
+    }, 50) as D1Database & { calls: { sql: string; args: unknown[] }[] };
+
+    await listBacklinks(db, 'current');
+
+    const candidate = db.calls.find(
+      (call) => call.sql.includes('FROM page p') && call.sql.includes('markdown LIKE'),
+    );
+    const aliasPattern = candidate?.args[2] as string;
+    expect(aliasPattern).toBe(`%[[%${'あ'.repeat(12)}\\%%`);
+    expect(aliasPattern.endsWith('\\')).toBe(false);
+    expect(byteLength(aliasPattern)).toBeLessThanOrEqual(50);
   });
 });
