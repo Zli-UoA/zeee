@@ -9,7 +9,7 @@
 
 ## 0. 結論（要約）
 
-1. **買収・統合は事実。しかも「予定」ではなく、すでに workerd に実装が入り始めている。** 2026-10-29 に Ryan Dahl 自身が PR [#7994](https://github.com/cloudflare/workerd/pull/7994) をマージしており、説明文は *"This is the beginning of merging celld's functionality into workerd"* 。以降約 1 ヶ月で 20 本以上の関連 PR が入り、最新リリースは `workerd@1.20261127.1`（調査日）。
+1. **買収・統合は事実。しかも「予定」ではなく、すでに workerd に実装が入り始めている。** 2026-10-29 に Ryan Dahl 自身が PR [#7994](https://github.com/cloudflare/workerd/pull/7994) をマージしており、説明文は _"This is the beginning of merging celld's functionality into workerd"_ 。以降約 1 ヶ月で 20 本以上の関連 PR が入り、最新リリースは `workerd@1.20261127.1`（調査日）。
 2. **ただし本番で使える状態ではない。** クラスタモードは今も `--experimental`。書き込みはバケット同期完了まで ACK されず（遅い・S3 課金が重い）、無停止デプロイ（#8155 / #8176）や一部の整合性バグが未解決。**celld も v0.6.3（10/21）で事実上凍結**（PR 受付停止、未解決 issue 104 件）。
 3. **このプロジェクトは「Deno アプリ」ではなく、すでに Workers アプリ。** `Deno.*` は 0 件。D1 + Durable Objects + 静的アセットだけを使い、`nodejs_compat` も実質不要。**アプリコードの移行作業はほぼゼロ**で、作業の 9 割はデプロイ基盤とデータ移行。
 4. **推奨: 本番を self-hosted workerd に今すぐ載せ替えるのはやめ、段階移行にする。** 今は「本番は celld 継続 or Cloudflare Workers、ローカル / CI は workerd」のハイブリッドにし、1〜3 ヶ月でクラスタのパイロット、6〜12 ヶ月でゲート基準を満たしたら本番カットオーバー。**待つことのコストはほぼゼロ**（Deno Deploy 停止や Deno runtime EOL はこのアプリに直接影響しない）。
@@ -18,17 +18,17 @@
 
 ## 1. ニュースの整理（事実関係）
 
-| 日付 | 出来事 |
-|---|---|
-| 2026-08-05 | celld v0.1.0 公開。Workers / DO を「1 Rust バイナリ + オブジェクトストレージ 1 つ」で自前運用する実装 |
-| **2026-10-09** | Cloudflare が Deno チーム全体の合流を発表（[Deno blog](https://deno.com/blog/cloudflare) / [Cloudflare blog](https://blog.cloudflare.com/deno-joins-cloudflare/)）。Ryan Dahl + Bert Belder が celld を workerd に統合する新取り組みをリード |
-| 10-09 時点の予定 | Deno runtime: 1 年間の月次バグ修正 / セキュリティ修正の後、開発終了（OSS は残る）。Deno Deploy: 6 ヶ月後に停止（≈2027-04-09）、有料顧客は Workers へ移行支援。JSR: 継続（インフラは Cloudflare へ）。rusty_v8: 継続支援＋workerd 統合を目指す |
-| 2026-10-21 | celld **v0.6.3** が最後のリリース。以降 `main` にコミットなし。beta のまま、PR は停止（パッチはメール提出） |
-| 2026-10-24 | Cloudflare Connect のセッションで「nascent plans」。GA 日付の発表なし |
-| **2026-10-26 → 29** | workerd PR #7994 がマージ。**クラスタモードの実装が workerd に入る** |
-| 11 月 | クラスタ関連 PR が連続マージ（§2） |
-| 2026-11-25 | Kubernetes サンプル (#8274) がマージ（3 Pod、DO ハンドオフ、RustFS バケット代替） |
-| **2026-11-27** | 最新リリース `v1.20261127.1`。公式ブログでの続報・GA 発表は**まだなし** |
+| 日付                | 出来事                                                                                                                                                                                                                                        |
+| ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 2026-08-05          | celld v0.1.0 公開。Workers / DO を「1 Rust バイナリ + オブジェクトストレージ 1 つ」で自前運用する実装                                                                                                                                         |
+| **2026-10-09**      | Cloudflare が Deno チーム全体の合流を発表（[Deno blog](https://deno.com/blog/cloudflare) / [Cloudflare blog](https://blog.cloudflare.com/deno-joins-cloudflare/)）。Ryan Dahl + Bert Belder が celld を workerd に統合する新取り組みをリード  |
+| 10-09 時点の予定    | Deno runtime: 1 年間の月次バグ修正 / セキュリティ修正の後、開発終了（OSS は残る）。Deno Deploy: 6 ヶ月後に停止（≈2027-04-09）、有料顧客は Workers へ移行支援。JSR: 継続（インフラは Cloudflare へ）。rusty_v8: 継続支援＋workerd 統合を目指す |
+| 2026-10-21          | celld **v0.6.3** が最後のリリース。以降 `main` にコミットなし。beta のまま、PR は停止（パッチはメール提出）                                                                                                                                   |
+| 2026-10-24          | Cloudflare Connect のセッションで「nascent plans」。GA 日付の発表なし                                                                                                                                                                         |
+| **2026-10-26 → 29** | workerd PR #7994 がマージ。**クラスタモードの実装が workerd に入る**                                                                                                                                                                          |
+| 11 月               | クラスタ関連 PR が連続マージ（§2）                                                                                                                                                                                                            |
+| 2026-11-25          | Kubernetes サンプル (#8274) がマージ（3 Pod、DO ハンドオフ、RustFS バケット代替）                                                                                                                                                             |
+| **2026-11-27**      | 最新リリース `v1.20261127.1`。公式ブログでの続報・GA 発表は**まだなし**                                                                                                                                                                       |
 
 Kenton Varda の説明は率直: workerd の DO は「シングルインスタンス＝ローカル検証用でスケールしない」のが最大の穴で、Cloudflare 本番のルーティングは自前運用には向かない "beast"。そこへ celld が入る、という構図です。
 
@@ -42,24 +42,24 @@ PR #7994 の実装（一次本文確認済み）:
 - **各 Durable Object は常に 1 オーナー**。任意のノードがリクエストを受け取り、オーナー死亡時は別ノードがバケットから引き継ぐ
 - コミットログは **Cap'n Proto フレーム (`frames.capnp`)**。celld の LTX と概念は同じだが形式は別（workerd 側は Litestream のアルゴリズム / フォーマットを採用）
 - 起動: `workerd serve --experimental config.capnp --cluster-addr 10.0.0.1:7000`
-- **作者自身の但し書き**: *"an object acknowledges a write only once it is fully synced to the bucket; that is much too slow and expensive for most uses"*
+- **作者自身の但し書き**: _"an object acknowledges a write only once it is fully synced to the bucket; that is much too slow and expensive for most uses"_
 
 ### 続くマージ（11 月）
 
-| 日 | PR | 内容 |
-|---|---|---|
-| 10-30 / 10-31 | #8090 / #8113 | DO alarms / DO facets（facet ごとの DB をルートログの 1 レーンとして扱う） |
-| 11-05 | #8166 | デプロイをバケットへ格納 + `workerd deploy` コマンド |
-| 11-06 | #8168 / #8173 | 移動した DO の再解決 / 停止ノードの DO をピアへ移譲 + `/ready` |
-| 11-07 | #8172 | 組み込み KV（各ネームスペース = 1 DO）— "Part of merging celld into workerd" |
-| 11-09 / 11-10 | #8235 / #8328 | Cron Triggers / Queues |
-| 11-11 / 11-13 | #8322 / #8331 | GCS バケット / Workflows |
-| **11-16** | **#8486** | **組み込み D1**（各 DB = 1 DO） |
-| **11-19** | **#8507** | **R2 バケット** |
-| 11-20 | #8508 / #8631 / #8637 | クラスタ共通 Cache API / リース専用スレッド / イベントループ停止ノードのフェンシング |
-| 11-23 | #8752 / #8753 | `WORKERD_CLUSTER_KEY` / `WORKERD_CLUSTER_BUCKET` 環境変数、**Wrangler プロジェクトが `--cluster-addr` でクラスタ参加** |
-| 11-24 | #8504 | リリースごとのコンテナイメージ公開 |
-| 11-25 | #8274 | Kubernetes サンプル（3 Pod、ローリング時の DO 移譲、2,699 req 無失敗） |
+| 日            | PR                    | 内容                                                                                                                   |
+| ------------- | --------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| 10-30 / 10-31 | #8090 / #8113         | DO alarms / DO facets（facet ごとの DB をルートログの 1 レーンとして扱う）                                             |
+| 11-05         | #8166                 | デプロイをバケットへ格納 + `workerd deploy` コマンド                                                                   |
+| 11-06         | #8168 / #8173         | 移動した DO の再解決 / 停止ノードの DO をピアへ移譲 + `/ready`                                                         |
+| 11-07         | #8172                 | 組み込み KV（各ネームスペース = 1 DO）— "Part of merging celld into workerd"                                           |
+| 11-09 / 11-10 | #8235 / #8328         | Cron Triggers / Queues                                                                                                 |
+| 11-11 / 11-13 | #8322 / #8331         | GCS バケット / Workflows                                                                                               |
+| **11-16**     | **#8486**             | **組み込み D1**（各 DB = 1 DO）                                                                                        |
+| **11-19**     | **#8507**             | **R2 バケット**                                                                                                        |
+| 11-20         | #8508 / #8631 / #8637 | クラスタ共通 Cache API / リース専用スレッド / イベントループ停止ノードのフェンシング                                   |
+| 11-23         | #8752 / #8753         | `WORKERD_CLUSTER_KEY` / `WORKERD_CLUSTER_BUCKET` 環境変数、**Wrangler プロジェクトが `--cluster-addr` でクラスタ参加** |
+| 11-24         | #8504                 | リリースごとのコンテナイメージ公開                                                                                     |
+| 11-25         | #8274                 | Kubernetes サンプル（3 Pod、ローリング時の DO 移譲、2,699 req 無失敗）                                                 |
 
 ### 未解決（移行判断の关键点）
 
@@ -83,13 +83,13 @@ PR #7994 の実装（一次本文確認済み）:
 
 ### 3.2 celld 固有なのは「デプロイ基盤」だけ
 
-| 箇所 | celld 依存の中身 |
-|---|---|
-| `celld/vite.ts` | ビルド後に `dist/ssr/wrangler.json` を `dist/wrangler.json` へ書き換える Vite プラグイン |
-| `package.json:9-11` | `build:celld` / `watch:celld` / `dev:celld` (`celld dev dist`) |
-| `.github/workflows/deploy.yml:138-152` | celld 0.6.2 をダウンロードして `celld deploy dist` |
-| `scripts/spike-check.mjs` | `celld dev` を起動する E2E スパイク |
-| `docs/spike.md`, `docs/r2-operations-*.md`, `infra/terraform/*` | celld + R2 の運用設計 |
+| 箇所                                                            | celld 依存の中身                                                                         |
+| --------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| `celld/vite.ts`                                                 | ビルド後に `dist/ssr/wrangler.json` を `dist/wrangler.json` へ書き換える Vite プラグイン |
+| `package.json:9-11`                                             | `build:celld` / `watch:celld` / `dev:celld` (`celld dev dist`)                           |
+| `.github/workflows/deploy.yml:138-152`                          | celld 0.6.2 をダウンロードして `celld deploy dist`                                       |
+| `scripts/spike-check.mjs`                                       | `celld dev` を起動する E2E スパイク                                                      |
+| `docs/spike.md`, `docs/r2-operations-*.md`, `infra/terraform/*` | celld + R2 の運用設計                                                                    |
 
 **重要な好材料**: `celld/vite.ts` が生成する `dist/wrangler.json` のキー集合（`name`, `main`, `vars`, `durable_objects`, `migrations`, `d1_databases`, `assets`, `compatibility_*`）は、そのまま **`workerd serve --experimental dist/wrangler.json` が受け付ける形**。`void.lock.json` にも `PAGE_ROOM` / `PageRoomDurableObject` / migration tag `void-durable-page-room-v1` が記録済み。**ランタイム切替はほぼ設定差し替えで済む**見込みです。
 
@@ -115,13 +115,13 @@ PR #7994 の実装（一次本文確認済み）:
 
 ## 5. 選択肢の比較
 
-| 案 | 評価 |
-|---|---|
-| **Cloudflare Workers（ホステッド）へ今すぐ** | **今の最善**。アプリコード変更ゼロ、`void deploy` がそのまま使える。D1 / DO / 静的アセットは第一級。残作業は credential / CI / データ移行のみ。出口（workerd）も残る |
-| **self-hosted workerd を今すぐ本番化** | ❌ まだ早い。クラスタは生後 1 ヶ月の experimental、無停止デプロイ未解決、書き込みはバケット ACK、運用は全部自分持ち |
-| **celld 継続** | 短期的には動くが、新規ベットには最適ではない。v0.6.3 で凍結、104 issue、パッチはメール、mixed version 不可、TLS 終端なし |
-| **待つ（統合完了を待つ）** | デフォルト戦略。ただし受け身ではなく、§6 のゲート監視＋パイロットを行うこと |
-| **ハイブリッド（開発 / CI は workerd、本番は Workers / celld）** | ✅ **今日から採用すべき**。Miniflare は既に workerd。同じ `dist/wrangler.json` で適合性を継続検証できる |
+| 案                                                               | 評価                                                                                                                                                                 |
+| ---------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Cloudflare Workers（ホステッド）へ今すぐ**                     | **今の最善**。アプリコード変更ゼロ、`void deploy` がそのまま使える。D1 / DO / 静的アセットは第一級。残作業は credential / CI / データ移行のみ。出口（workerd）も残る |
+| **self-hosted workerd を今すぐ本番化**                           | ❌ まだ早い。クラスタは生後 1 ヶ月の experimental、無停止デプロイ未解決、書き込みはバケット ACK、運用は全部自分持ち                                                  |
+| **celld 継続**                                                   | 短期的には動くが、新規ベットには最適ではない。v0.6.3 で凍結、104 issue、パッチはメール、mixed version 不可、TLS 終端なし                                             |
+| **待つ（統合完了を待つ）**                                       | デフォルト戦略。ただし受け身ではなく、§6 のゲート監視＋パイロットを行うこと                                                                                          |
+| **ハイブリッド（開発 / CI は workerd、本番は Workers / celld）** | ✅ **今日から採用すべき**。Miniflare は既に workerd。同じ `dist/wrangler.json` で適合性を継続検証できる                                                              |
 
 ---
 
