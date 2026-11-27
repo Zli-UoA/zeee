@@ -1,0 +1,41 @@
+# ⚠️ EXPERIMENTAL / NON-PRODUCTION ONLY — 1 ノード用の参考例。
+# workerd README の systemd (socket activation) 例をベースにしている。
+# /usr/bin/workerd のパスは導入方法に合わせて変更すること。
+# 実秘密・実ホスト名はここへ書かないこと。
+
+[Unit]
+Description=workerd runtime (single-node pilot, experimental)
+After=local-fs.target remote-fs.target network-online.target
+Requires=local-fs.target remote-fs.target workerd.socket
+Wants=network-online.target
+
+[Service]
+Type=exec
+# config.capnp には socket name "http" を定義すること (--socket-fd http=3)。
+# TLS は前段のリバースプロキシで終端するので、README 例の https socket は使わない。
+# --experimental は D1 / R2 / assets などの experimental binding を使う場合に必要。
+ExecStart=/usr/bin/workerd serve /etc/workerd/config.capnp --socket-fd http=3 --data-dir=/var/lib/workerd
+Sockets=workerd.socket
+
+# クラスタに参加する場合は ExecStart に "--cluster-addr=PRIVATE_IPV4:7000" を
+# 追加し、下記 env ファイルへ WORKERD_CLUSTER_KEY / WORKERD_CLUSTER_BUCKET /
+# AWS_* を設定すること (peer 間は平文、私用 IPv4 ネットワーク限定)。
+# 単一ノードの参考例ではクラスタ参加は不要。
+EnvironmentFile=-/etc/workerd/workerd.env
+
+Restart=always
+RestartSec=2
+
+# systemd が /var/lib/workerd を作成・所有してくれる (--data-dir と一致させる)。
+StateDirectory=workerd
+
+# 特権ユーザーで動かさない。socket は workerd.socket が 80/443 の代わりに
+# 8080 を開くので、このサービス自体は特権ポートを必要としない。
+User=nobody
+Group=nogroup
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

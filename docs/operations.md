@@ -26,7 +26,7 @@ Zeee のアプリケーションは GitHub Actions で検証・デプロイす�
 
 1. 対象 ref を checkout
 2. `pnpm install --frozen-lockfile`、`pnpm check`、`pnpm test`、`pnpm build:celld`
-3. `dist/wrangler.json` を検証（Worker 名、`PUBLIC_ORIGIN`、D1 / Durable Object binding、開発用変数の混入なし）
+3. `dist/wrangler.json` を検証（Worker 名、`PUBLIC_ORIGIN`、D1 / Durable Object binding、開発用変数と移行フラグの混入なし）
 4. R2 secrets の有無を確認
 5. celld 0.6.2 を取得して `celld deploy dist`
 6. `https://zeee.zli.works/api/health` を最大 30 回確認
@@ -124,6 +124,7 @@ API では `createPage`、`updatePageTitle`、undelete の衝突を `409` と `{
 - secrets は GitHub Environment `production` にだけ置き、リポジトリや `.dev.vars` に書かない
 - `.dev.vars` と `dist/` は Git 管理外
 - 本番ビルドに `ZEEE_DEV_AUTH` を入れない（deploy workflow でも検証している）
+- `ZEEE_MIGRATION_IMPORT` は本番に絶対に入れない。許可されるのは空文字（未設定も可）だけで、`1` などの値が残ると deploy の config 検証で失敗する
 - credential をローテーションしたら Environment secrets を更新し、`workflow_dispatch` で再デプロイする
 
 ## 移行前バックアップ（workerd 移行の前提条件）
