@@ -1,4 +1,4 @@
-import { excerptFromMarkdown } from './db';
+import { clampLikeText, excerptFromMarkdown, LIKE_PATTERN_MAX_BYTES } from './db';
 import { findWikiReference, wikiPlainText } from '../markdown/wiki';
 
 export type Backlink = {
@@ -25,6 +25,14 @@ const CANDIDATE_LIMIT = 50;
 const RESULT_LIMIT = 20;
 const EXCERPT_CONTEXT = 80;
 const EXCERPT_LENGTH = 160;
+const BACKLINK_LIKE_PREFIX = '%[[%';
+const BACKLINK_LIKE_SUFFIX = '%';
+// The wrapper also counts against the LIKE budget, leaving the rest for the
+// escaped name. Titles and aliases are not length-validated, so without this
+// clamp a long Japanese name can exceed D1's 50-byte LIKE pattern limit.
+const BACKLINK_LIKE_TEXT_BYTES =
+  LIKE_PATTERN_MAX_BYTES -
+  new TextEncoder().encode(BACKLINK_LIKE_PREFIX + BACKLINK_LIKE_SUFFIX).byteLength;
 
 export async function listBacklinks(db: D1Database, pageId: string): Promise<Backlink[]> {
   const target = await db
@@ -51,7 +59,10 @@ export async function listBacklinks(db: D1Database, pageId: string): Promise<Bac
     names.push(name);
   }
 
-  const likes = names.map((name) => `%[[%${escapeLike(name)}%`);
+  const likes = names.map(
+    (name) =>
+      `${BACKLINK_LIKE_PREFIX}${clampLikeText(name, BACKLINK_LIKE_TEXT_BYTES, escapeLike)}${BACKLINK_LIKE_SUFFIX}`,
+  );
   const filters = names.map(() => "b.markdown LIKE ? ESCAPE '\\'").join(' OR ');
   const result = await db
     .prepare(

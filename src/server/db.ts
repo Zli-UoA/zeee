@@ -24,6 +24,53 @@ import {
 
 const EXCERPT_LENGTH = 180;
 const EXCERPT_SOURCE_LENGTH = 1000;
+// Hosted D1 rejects LIKE patterns longer than 50 bytes. Keep a few bytes of
+// headroom and count the two surrounding wildcards in the budget.
+export const D1_LIKE_PATTERN_MAX_BYTES = 50;
+export const LIKE_PATTERN_MAX_BYTES = 44;
+
+function clampByteBudget(maxBytes: number): number {
+  if (!Number.isFinite(maxBytes)) return LIKE_PATTERN_MAX_BYTES;
+  return Math.max(0, Math.min(D1_LIKE_PATTERN_MAX_BYTES, Math.floor(maxBytes)));
+}
+
+/**
+ * Return the longest leading substring whose per-character UTF-8 encoding,
+ * after applying `escapeChar`, fits in `maxBytes`. Whole characters are
+ * added at a time, so multibyte text ends on a valid boundary and escape
+ * sequences are never split.
+ */
+export function clampLikeText(
+  text: string,
+  maxBytes: number,
+  escapeChar: (char: string) => string = (char) => char,
+): string {
+  const limit = clampByteBudget(maxBytes);
+  const encoder = new TextEncoder();
+  let prefix = '';
+  let used = 0;
+  for (const char of text) {
+    const escaped = escapeChar(char);
+    const size = encoder.encode(escaped).byteLength;
+    if (used + size > limit) break;
+    prefix += escaped;
+    used += size;
+  }
+  return prefix;
+}
+
+/**
+ * Build a `%query%` LIKE pattern whose UTF-8 encoding never exceeds the D1
+ * byte limit, even when a larger `maxBytes` is requested. Truncation happens
+ * on character boundaries and keeps the leading substring, so a prefix of the
+ * query still matches as a substring. Budgets below two bytes cannot hold
+ * both wildcards and return the shortest pattern that fits instead.
+ */
+export function clampLikePattern(query: string, maxBytes = LIKE_PATTERN_MAX_BYTES): string {
+  const limit = clampByteBudget(maxBytes);
+  if (limit < 2) return '%'.slice(0, limit);
+  return `%${clampLikeText(query, limit - 2)}%`;
+}
 
 export class PathConflictError extends Error {
   constructor() {
@@ -816,7 +863,7 @@ export async function searchPages(
       // Preserve the existing LIKE fallback for stores without usable FTS.
     }
   }
-  const like = `%${trimmed}%`;
+  const like = clampLikePattern(trimmed);
   const after = cursor
     ? 'AND p.updated_at <= ? AND (p.updated_at < ? OR (p.updated_at = ? AND p.id > ?))'
     : '';
@@ -864,7 +911,7 @@ async function countSearchPages(
     return Number(row?.count ?? 0);
   }
 
-  const like = `%${query}%`;
+  const like = clampLikePattern(query);
   const row = await db
     .prepare(
       `SELECT COUNT(*) AS count
