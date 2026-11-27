@@ -24,6 +24,29 @@ import {
 
 const EXCERPT_LENGTH = 180;
 const EXCERPT_SOURCE_LENGTH = 1000;
+// Hosted D1 rejects LIKE patterns longer than 50 bytes. Keep a few bytes of
+// headroom and count the two surrounding wildcards in the budget.
+const LIKE_PATTERN_MAX_BYTES = 44;
+
+/**
+ * Build a `%query%` LIKE pattern that never exceeds the D1 byte limit.
+ * Truncation happens on UTF-8 character boundaries and keeps the leading
+ * substring, so a prefix of the query still matches as a substring.
+ */
+export function clampLikePattern(query: string, maxBytes = LIKE_PATTERN_MAX_BYTES): string {
+  const limit = Number.isFinite(maxBytes) ? Math.floor(maxBytes) : LIKE_PATTERN_MAX_BYTES;
+  const budget = Math.max(0, limit - 2); // two bytes for the surrounding `%`
+  const encoder = new TextEncoder();
+  let prefix = '';
+  let used = 0;
+  for (const char of query) {
+    const size = encoder.encode(char).byteLength;
+    if (used + size > budget) break;
+    prefix += char;
+    used += size;
+  }
+  return `%${prefix}%`;
+}
 
 export class PathConflictError extends Error {
   constructor() {
@@ -816,7 +839,7 @@ export async function searchPages(
       // Preserve the existing LIKE fallback for stores without usable FTS.
     }
   }
-  const like = `%${trimmed}%`;
+  const like = clampLikePattern(trimmed);
   const after = cursor
     ? 'AND p.updated_at <= ? AND (p.updated_at < ? OR (p.updated_at = ? AND p.id > ?))'
     : '';
@@ -864,7 +887,7 @@ async function countSearchPages(
     return Number(row?.count ?? 0);
   }
 
-  const like = `%${query}%`;
+  const like = clampLikePattern(query);
   const row = await db
     .prepare(
       `SELECT COUNT(*) AS count
