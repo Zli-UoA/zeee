@@ -25,12 +25,17 @@ const devVarsPath = join(project, '.dev.vars');
 const originalDevVars = existsSync(devVarsPath) ? readFileSync(devVarsPath, 'utf8') : null;
 const withoutDevAuth = (originalDevVars ?? '')
   .split('\n')
-  .filter((line) => !line.startsWith('ZEEE_DEV_AUTH=') && !line.startsWith('PUBLIC_ORIGIN='))
+  .filter(
+    (line) =>
+      !line.startsWith('ZEEE_DEV_AUTH=') &&
+      !line.startsWith('PUBLIC_ORIGIN=') &&
+      !line.startsWith('ZEEE_MIGRATION_IMPORT='),
+  )
   .join('\n')
   .trimEnd();
 writeFileSync(
   devVarsPath,
-  `${withoutDevAuth}${withoutDevAuth ? '\n' : ''}ZEEE_DEV_AUTH=1\nPUBLIC_ORIGIN=http://127.0.0.1:${port}\n`,
+  `${withoutDevAuth}${withoutDevAuth ? '\n' : ''}ZEEE_DEV_AUTH=1\nPUBLIC_ORIGIN=http://127.0.0.1:${port}\nZEEE_MIGRATION_IMPORT=1\n`,
 );
 
 let child = null;
@@ -177,6 +182,21 @@ async function readState(pageId) {
   return doc.getText('markdown').toJSON();
 }
 
+async function exportState(pageId) {
+  const response = await request(`/api/pages/${pageId}/state`);
+  if (!response.ok)
+    throw new Error(`state export failed: ${response.status} ${await response.text()}`);
+  return new Uint8Array(await response.arrayBuffer());
+}
+
+function importState(pageId, bytes) {
+  return request(`/api/pages/${pageId}/import-state`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/octet-stream' },
+    body: bytes,
+  });
+}
+
 async function main() {
   start(true);
   await waitForServer();
@@ -231,7 +251,8 @@ async function main() {
     );
   }
 
-  await sleep(2500);
+  // Materialization is debounced by MATERIALIZE_DEBOUNCE_MS (10s).
+  await sleep(11_000);
 
   const page = await (await request(`/api/pages/${pageId}`)).json();
   if (!phrases.every((phrase) => page.page.markdown.includes(phrase))) {
@@ -292,12 +313,60 @@ async function main() {
     throw new Error(`state did not survive restart: ${JSON.stringify(afterRestart)}`);
   }
 
+  // Migration-only raw Yjs import: reuse the exported bytes on a fresh DO.
+  const exported = await exportState(pageId);
+  response = await request('/api/pages', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ title: 'import target' }),
+  });
+  if (!response.ok) throw new Error(`create import target failed: ${response.status}`);
+  const targetId = (await response.json()).page.id;
+
+  const watcher = connect(targetId);
+  await new Promise((resolve, reject) => {
+    watcher.socket.once('open', resolve);
+    watcher.socket.once('error', reject);
+  });
+  watcher.doc.getText('markdown').insert(0, 'stale client content\n');
+  watcher.sendUpdate();
+  await waitForText(watcher.doc, ['stale client content']);
+  response = await importState(targetId, exported);
+  if (response.status !== 409) {
+    throw new Error(`connected client did not block import: ${response.status}`);
+  }
+  if (!(await readState(targetId)).includes('stale client content')) {
+    throw new Error('a rejected import changed the state');
+  }
+  watcher.socket.close();
+  await sleep(300);
+
+  response = await importState(targetId, exported);
+  if (!response.ok)
+    throw new Error(`state import failed: ${response.status} ${await response.text()}`);
+  const importedText = await readState(targetId);
+  if (importedText !== afterRestart) {
+    throw new Error(`imported state differs: ${JSON.stringify(importedText)}`);
+  }
+  const importedPage = await (await request(`/api/pages/${targetId}`)).json();
+  if (importedPage.page.markdown !== afterRestart) {
+    throw new Error(`imported D1 body differs: ${JSON.stringify(importedPage.page.markdown)}`);
+  }
+
+  response = await importState(targetId, new Uint8Array(5 * 1024 * 1024 + 1));
+  if (response.status !== 413)
+    throw new Error(`oversized import was not rejected: ${response.status}`);
+  if ((await readState(targetId)) !== importedText) {
+    throw new Error('a rejected oversized import changed the state');
+  }
+
   console.log('spike ok');
   console.log(`  page: ${pageId}`);
   console.log(`  text: ${JSON.stringify(afterRestart)}`);
   console.log(`  search hits: ${search.results.length}`);
   console.log(`  revisions: ${revisions.revisions.length}`);
   console.log(`  ws messages: alice=${alice.received.length} bob=${bob.received.length}`);
+  console.log(`  import target: ${targetId}`);
 }
 
 try {

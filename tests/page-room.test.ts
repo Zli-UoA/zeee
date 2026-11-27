@@ -20,7 +20,7 @@ vi.mock('../src/server/db', () => ({
 
 import { PageRoomObject } from '../durable-objects/page-room';
 
-function setup(initial: Uint8Array[] = [], initialSnapshot?: Uint8Array) {
+function setup(initial: Uint8Array[] = [], initialSnapshot?: Uint8Array, connected?: WebSocket[]) {
   let snapshot = initialSnapshot ?? null;
   const rows = [...initial];
   const exec = vi.fn((query: string, ...args: unknown[]) => {
@@ -37,7 +37,19 @@ function setup(initial: Uint8Array[] = [], initialSnapshot?: Uint8Array) {
       },
     };
   });
-  const peer = { send: vi.fn() };
+  const transactionSync = vi.fn(<T>(work: () => T): T => {
+    const previousRows = [...rows];
+    const previousSnapshot = snapshot;
+    try {
+      return work();
+    } catch (error) {
+      rows.length = 0;
+      rows.push(...previousRows);
+      snapshot = previousSnapshot;
+      throw error;
+    }
+  });
+  const peer = { send: vi.fn() } as unknown as WebSocket;
   const send = vi.fn();
   const socket = {
     send,
@@ -45,11 +57,15 @@ function setup(initial: Uint8Array[] = [], initialSnapshot?: Uint8Array) {
   } as unknown as WebSocket;
   const ctx = {
     id: { name: 'page-1' },
-    storage: { sql: { exec }, setAlarm: vi.fn().mockResolvedValue(undefined) },
-    getWebSockets: () => [socket, peer],
+    storage: {
+      sql: { exec },
+      transactionSync,
+      setAlarm: vi.fn().mockResolvedValue(undefined),
+    },
+    getWebSockets: () => connected ?? [socket, peer],
   } as unknown as DurableObjectState;
   const room = new PageRoomObject(ctx, {} as Env);
-  return { room, rows, socket, send, peer, exec, snapshot: () => snapshot };
+  return { room, rows, socket, send, peer, exec, transactionSync, snapshot: () => snapshot };
 }
 
 function updateFrom(text: string): Uint8Array {
@@ -224,7 +240,7 @@ describe('PageRoom durable acknowledgements', () => {
   });
 
   it('imports a raw Yjs state and keeps it after a restart', async () => {
-    const harness = setup([updateFrom('old')]);
+    const harness = setup([updateFrom('old')], undefined, []);
     expect(await readState(harness)).toBe('old');
 
     const state = updateFrom('imported');
@@ -246,7 +262,7 @@ describe('PageRoom durable acknowledgements', () => {
     const state = Y.encodeStateAsUpdate(source);
     source.destroy();
 
-    const harness = setup();
+    const harness = setup([], undefined, []);
     const response = await harness.room.fetch(importRequest(arrayBuffer(state)));
     expect(response.status).toBe(200);
     // A re-encoded state is byte-for-byte the imported one only when the
@@ -255,7 +271,7 @@ describe('PageRoom durable acknowledgements', () => {
   });
 
   it('rejects invalid bytes with 400 without changing the state or log', async () => {
-    const harness = setup([updateFrom('original')]);
+    const harness = setup([updateFrom('original')], undefined, []);
     expect(await readState(harness)).toBe('original');
 
     const response = await harness.room.fetch(importRequest(arrayBuffer(new Uint8Array([255]))));
@@ -266,7 +282,7 @@ describe('PageRoom durable acknowledgements', () => {
   });
 
   it('rejects oversized imports with 413 before reading the body', async () => {
-    const harness = setup([updateFrom('original')]);
+    const harness = setup([updateFrom('original')], undefined, []);
     const response = await harness.room.fetch(
       importRequest(arrayBuffer(new Uint8Array([0, 0])), {
         'content-length': String(5 * 1024 * 1024 + 1),
@@ -278,7 +294,7 @@ describe('PageRoom durable acknowledgements', () => {
   });
 
   it('rejects an oversized streamed body even without a content-length header', async () => {
-    const harness = setup([updateFrom('original')]);
+    const harness = setup([updateFrom('original')], undefined, []);
     const body = new ReadableStream<Uint8Array>({
       start(controller) {
         controller.enqueue(new Uint8Array(5 * 1024 * 1024 + 1));
@@ -297,5 +313,62 @@ describe('PageRoom durable acknowledgements', () => {
     expect(response.status).toBe(413);
     expect(await readState(harness)).toBe('original');
     expect(harness.rows).toHaveLength(1);
+  });
+
+  it('refuses to import while a websocket client is connected', async () => {
+    const harness = setup([updateFrom('original')]);
+    const before = await readStateBytes(harness);
+    const response = await harness.room.fetch(importRequest(arrayBuffer(updateFrom('imported'))));
+    expect(response.status).toBe(409);
+    expect(await readStateBytes(harness)).toEqual(before);
+    expect(harness.rows).toHaveLength(1);
+    expect(harness.snapshot()).toBeNull();
+    expect(harness.transactionSync).not.toHaveBeenCalled();
+    expect(harness.peer.send).not.toHaveBeenCalled();
+  });
+
+  it('nacks client updates while an import is in progress', async () => {
+    const harness = setup([updateFrom('old')], undefined, []);
+    expect(await readState(harness)).toBe('old');
+    let controller!: ReadableStreamDefaultController<Uint8Array>;
+    const stream = new ReadableStream<Uint8Array>({
+      start(input) {
+        controller = input;
+      },
+    });
+    const init = {
+      method: 'POST',
+      headers: { 'x-zeee-user': 'user-1' },
+      body: stream,
+      duplex: 'half',
+    } as unknown as RequestInit;
+    const importing = harness.room.fetch(
+      new Request('https://zeee.test/api/pages/page-1/import-state', init),
+    );
+    await Promise.resolve();
+    await send(harness, updateFrom('stale'), 7);
+    expect(harness.send).toHaveBeenLastCalledWith(JSON.stringify({ type: 'nack', clientSeq: 7 }));
+    expect(await readState(harness)).toBe('old');
+
+    controller.enqueue(updateFrom('imported'));
+    controller.close();
+    expect((await importing).status).toBe(200);
+    expect(await readState(harness)).toBe('imported');
+  });
+
+  it('rolls back the storage swap when a write inside the transaction fails', async () => {
+    const harness = setup([updateFrom('original')], undefined, []);
+    expect(await readState(harness)).toBe('original');
+    const exec = harness.exec.getMockImplementation()!;
+    harness.exec.mockImplementation((query: string, ...args: unknown[]) => {
+      if (query.startsWith('INSERT INTO doc_snapshot')) throw new Error('disk full');
+      return exec(query, ...args);
+    });
+    await expect(
+      harness.room.fetch(importRequest(arrayBuffer(updateFrom('imported')))),
+    ).rejects.toThrow('disk full');
+    expect(await readState(harness)).toBe('original');
+    expect(harness.rows).toHaveLength(1);
+    expect(harness.snapshot()).toBeNull();
   });
 });

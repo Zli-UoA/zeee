@@ -4,7 +4,11 @@ import { recordAudit } from '../../../../src/server/db';
 import { jsonError, pathParam, sameOrigin } from '../../../../src/server/http';
 import { roomFetch } from '../../../../src/server/rooms';
 import type { Env } from '../../../../src/server/types';
-import { MAX_STATE_IMPORT_BYTES } from '../../../../src/shared/yjs';
+import {
+  MAX_STATE_IMPORT_BYTES,
+  PayloadTooLargeError,
+  readBoundedBytes,
+} from '../../../../src/shared/yjs';
 
 export const POST = defineHandler(async (c) => {
   const env = c.env as Env;
@@ -14,20 +18,41 @@ export const POST = defineHandler(async (c) => {
   const user = await getSessionUser(c);
   if (!user) return jsonError(c, 401, 'login required');
   if (!sameOrigin(c)) return jsonError(c, 403, 'origin mismatch');
-
-  const declaredLength = Number(c.req.header('content-length') ?? '0');
-  if (Number.isFinite(declaredLength) && declaredLength > MAX_STATE_IMPORT_BYTES) {
-    return Response.json({ error: 'state is too large' }, { status: 413 });
-  }
-
-  const body = await c.req.arrayBuffer();
   const pageId = pathParam(c, 'id');
-  const response = await roomFetch(pageId, '/import-state', user, {
-    method: 'POST',
-    headers: { 'content-type': 'application/octet-stream' },
-    body,
-  });
-  if (!response.ok) return response;
-  await recordAudit(env.DB, user.id, 'page.state_import', 'page', pageId);
-  return response;
+
+  try {
+    let bytes: Uint8Array | null = null;
+    let tooLarge = false;
+    try {
+      const declaredLength = Number(c.req.header('content-length') ?? '0');
+      if (Number.isFinite(declaredLength) && declaredLength > MAX_STATE_IMPORT_BYTES) {
+        tooLarge = true;
+      } else {
+        // Count bytes while reading: Content-Length is advisory only.
+        bytes = await readBoundedBytes(c.req.raw.body);
+      }
+    } catch (error) {
+      if (error instanceof PayloadTooLargeError) tooLarge = true;
+    }
+
+    if (tooLarge) return jsonError(c, 413, 'state is too large');
+    if (!bytes) return jsonError(c, 400, 'invalid state');
+
+    return await roomFetch(pageId, '/import-state', user, {
+      method: 'POST',
+      headers: { 'content-type': 'application/octet-stream' },
+      body: bytes.buffer.slice(
+        bytes.byteOffset,
+        bytes.byteOffset + bytes.byteLength,
+      ) as ArrayBuffer,
+    });
+  } finally {
+    // Audit every authenticated attempt, including 400/409/413 rejections.
+    // A failed audit write must never turn a successful import into a 500.
+    try {
+      await recordAudit(env.DB, user.id, 'page.state_import', 'page', pageId);
+    } catch (error) {
+      console.error('failed to record page.state_import audit', error);
+    }
+  }
 });

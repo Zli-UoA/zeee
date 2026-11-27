@@ -4,7 +4,12 @@ import { defineDurableObject } from 'void/durable';
 import { createRevision, latestRevision, materializePage } from '../src/server/db';
 import type { Env } from '../src/server/types';
 import { decodeBase64, encodeBase64 } from '../src/shared/base64';
-import { containsUpdate, MAX_STATE_IMPORT_BYTES } from '../src/shared/yjs';
+import {
+  containsUpdate,
+  MAX_STATE_IMPORT_BYTES,
+  PayloadTooLargeError,
+  readBoundedBytes,
+} from '../src/shared/yjs';
 
 type ClientMessage =
   | { type: 'sync'; stateVector: string }
@@ -26,6 +31,10 @@ export class PageRoomObject extends DurableObject<Env> {
   private lastSnapshotAt = 0;
   private lastSearchAt = 0;
   private alarmScheduled = false;
+  private importing = false;
+  // Alarm materialization and imports both touch DO storage and D1. Serialize
+  // them so a slow alarm cannot write the pre-import document back to D1.
+  private operationQueue: Promise<void> = Promise.resolve();
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -87,7 +96,10 @@ export class PageRoomObject extends DurableObject<Env> {
     const userName = request.headers.get('x-zeee-name') ?? 'someone';
     if (!userId) return new Response('Unauthorized', { status: 401 });
 
-    if (url.pathname.endsWith('/ws')) return this.openSocket(request, userId);
+    if (url.pathname.endsWith('/ws')) {
+      if (this.importing) return Response.json({ error: 'import in progress' }, { status: 409 });
+      return this.openSocket(request, userId);
+    }
     if (url.pathname.endsWith('/state')) {
       const state = Y.encodeStateAsUpdate(this.doc);
       const body = state.buffer.slice(
@@ -135,8 +147,17 @@ export class PageRoomObject extends DurableObject<Env> {
     } catch {
       return;
     }
+    const clientSeq =
+      'clientSeq' in parsed && typeof parsed.clientSeq === 'number' ? parsed.clientSeq : undefined;
 
     await this.ready;
+
+    // An import swaps the whole document. Never mix updates from the old state
+    // into it: reject them so the client retries against the new state.
+    if (this.importing) {
+      if (clientSeq !== undefined) this.reply(socket, { type: 'nack', clientSeq });
+      return;
+    }
 
     if (parsed.type === 'sync') {
       const stateVector = decodeBase64(parsed.stateVector);
@@ -152,7 +173,6 @@ export class PageRoomObject extends DurableObject<Env> {
 
     if (parsed.type !== 'update') return;
 
-    const clientSeq = typeof parsed.clientSeq === 'number' ? parsed.clientSeq : undefined;
     try {
       const update = decodeBase64(parsed.update);
       // Validate on a copy first. A failed SQL write must never appear in later syncs.
@@ -213,6 +233,20 @@ export class PageRoomObject extends DurableObject<Env> {
   }
 
   async alarm(): Promise<void> {
+    return this.serialize(() => this.runAlarm());
+  }
+
+  /** Run operations one at a time, even if an earlier operation failed. */
+  private serialize<T>(work: () => Promise<T>): Promise<T> {
+    const result = this.operationQueue.then(work, work);
+    this.operationQueue = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
+  }
+
+  private async runAlarm(): Promise<void> {
     await this.ready;
     this.alarmScheduled = false;
     if (!this.pageId) return;
@@ -265,49 +299,73 @@ export class PageRoomObject extends DurableObject<Env> {
    * ids instead of replaying a markdown diff through the current doc.
    */
   private async importState(request: Request, userId: string, userName: string): Promise<Response> {
-    const declaredLength = Number(request.headers.get('content-length') ?? '0');
-    if (Number.isFinite(declaredLength) && declaredLength > MAX_STATE_IMPORT_BYTES) {
-      return Response.json({ error: 'state is too large' }, { status: 413 });
+    if (this.importing) {
+      return Response.json({ error: 'import already in progress' }, { status: 409 });
+    }
+    // Clients keep their own Yjs state. Broadcasting an imported update would
+    // merge it with stale structs, so refuse while anyone is connected.
+    if (this.ctx.getWebSockets().length > 0) {
+      return Response.json({ error: 'close websockets before importing' }, { status: 409 });
     }
 
-    let bytes: Uint8Array;
+    this.importing = true;
     try {
-      const buffer = await request.arrayBuffer();
-      if (buffer.byteLength > MAX_STATE_IMPORT_BYTES) {
+      const declaredLength = Number(request.headers.get('content-length') ?? '0');
+      if (Number.isFinite(declaredLength) && declaredLength > MAX_STATE_IMPORT_BYTES) {
         return Response.json({ error: 'state is too large' }, { status: 413 });
       }
-      bytes = new Uint8Array(buffer);
-    } catch {
-      return Response.json({ error: 'invalid state' }, { status: 400 });
-    }
 
-    // Validate on a separate doc first. Invalid bytes must never reach the
-    // live doc or the durable log, just like the containsUpdate check in
-    // webSocketMessage.
-    const replacement = new Y.Doc();
-    try {
-      Y.applyUpdate(replacement, bytes, 'import');
-    } catch {
-      replacement.destroy();
-      return Response.json({ error: 'invalid state' }, { status: 400 });
-    }
+      let bytes: Uint8Array;
+      try {
+        bytes = await readBoundedBytes(request.body);
+      } catch (error) {
+        if (error instanceof PayloadTooLargeError) {
+          return Response.json({ error: 'state is too large' }, { status: 413 });
+        }
+        return Response.json({ error: 'invalid state' }, { status: 400 });
+      }
 
+      // Validate on a separate doc first. Invalid bytes must never reach the
+      // live doc or the durable log, just like the containsUpdate check in
+      // webSocketMessage.
+      const replacement = new Y.Doc();
+      try {
+        Y.applyUpdate(replacement, bytes, 'import');
+      } catch {
+        replacement.destroy();
+        return Response.json({ error: 'invalid state' }, { status: 400 });
+      }
+
+      return await this.serialize(() => this.applyImport(replacement, bytes, userId, userName));
+    } finally {
+      this.importing = false;
+    }
+  }
+
+  private async applyImport(
+    replacement: Y.Doc,
+    bytes: Uint8Array,
+    userId: string,
+    userName: string,
+  ): Promise<Response> {
     const now = Date.now();
     try {
       // The imported state becomes the only source of truth. Clearing the log
-      // and overwriting the snapshot together keeps load() from replaying the
-      // previous document on the next start.
-      this.ctx.storage.sql.exec('DELETE FROM doc_update');
-      this.ctx.storage.sql.exec(
-        `INSERT INTO doc_snapshot (id, state, seq, created_at) VALUES (1, ?, 0, ?)
-         ON CONFLICT(id) DO UPDATE SET state = excluded.state, seq = excluded.seq, created_at = excluded.created_at`,
-        bytes,
-        now,
-      );
-      this.ctx.storage.sql.exec(
-        'INSERT INTO doc_actor (id, actor_id) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET actor_id = excluded.actor_id',
-        userId,
-      );
+      // and overwriting the snapshot in one transaction keeps load() from
+      // replaying the previous document on the next start.
+      this.ctx.storage.transactionSync(() => {
+        this.ctx.storage.sql.exec('DELETE FROM doc_update');
+        this.ctx.storage.sql.exec(
+          `INSERT INTO doc_snapshot (id, state, seq, created_at) VALUES (1, ?, 0, ?)
+           ON CONFLICT(id) DO UPDATE SET state = excluded.state, seq = excluded.seq, created_at = excluded.created_at`,
+          bytes,
+          now,
+        );
+        this.ctx.storage.sql.exec(
+          'INSERT INTO doc_actor (id, actor_id) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET actor_id = excluded.actor_id',
+          userId,
+        );
+      });
     } catch (error) {
       replacement.destroy();
       throw error;
@@ -318,7 +376,7 @@ export class PageRoomObject extends DurableObject<Env> {
     this.text = replacement.getText('markdown');
     this.lastActorId = userId;
     this.lastSnapshotAt = now;
-    this.broadcast({ type: 'update', update: encodeBase64(bytes) });
+    // No broadcast: connected clients were rejected with 409 above.
 
     await materializePage(this.env.DB, this.pageId, this.text.toJSON(), userId);
     this.lastSearchAt = Date.now();

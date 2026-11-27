@@ -13,7 +13,7 @@ export function redirectTo(c: CloudContext, path: string, status: 302 | 303 = 30
 
 export function jsonError(
   c: CloudContext,
-  status: 400 | 401 | 403 | 404 | 409 | 500 | 503,
+  status: 400 | 401 | 403 | 404 | 409 | 413 | 500 | 503,
   message: string,
 ): Response {
   return c.json({ error: message }, status);
