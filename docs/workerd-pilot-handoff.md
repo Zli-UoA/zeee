@@ -40,16 +40,16 @@
 実値は書かない。**キー名と取得元だけ**を記載する。Secret はリポジトリへコミットせず、
 クラスタ上で `kubectl create secret` により作成する。
 
-| 名前                                                                                                     | 置き場所                                                   | 値の取得元 / 生成方法                                                                             |
-| -------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
-| `WORKERD_CLUSTER_KEY`                                                                                    | Secret `workerd-pilot-cluster` / key `key`                 | `openssl rand -hex 32` で生成（32 bytes）。全ノードで同じ値を共有する。                           |
-| `WORKERD_CLUSTER_BUCKET`                                                                                 | ConfigMap `workerd-pilot-config`                           | `s3://<PILOT_BUCKET>/<PILOT_PREFIX>`（GCS の場合は `gs://<PILOT_BUCKET>/<PILOT_PREFIX>`）。       |
-| `AWS_ENDPOINT_URL` / `AWS_REGION`                                                                        | ConfigMap `workerd-pilot-config`                           | パイロット用 S3 互換 endpoint / region（リポジトリにはプレースホルダのみ）。                      |
-| `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`                                                            | Secret `workerd-pilot-bucket` / `access-key`, `secret-key` | パイロット用バケットにのみ書き込み権限を持つ専用 credential。                                     |
-| `WORKERD_SHUTDOWN_DELAY_MS` / `WORKERD_CLUSTER_STOP_TIMEOUT_MS`                                          | ConfigMap `workerd-pilot-config`                           | 雛形の既定値（停止中の引き継ぎ時間）を使用。変更する場合は README の Note を参照。                |
-| `PUBLIC_ORIGIN` / `AUTHZ_ISSUER` / `AUTHZ_CLIENT_ID` / `EMOJI_SERVICE_URL` / `EMOJI_ACCOUNT_PROFILE_URL` | アプリ vars（`void.config.ts` の `cloudflare.vars`）       | パイロット用の到達可能な値に設定し直す。本番値は使わない（絵文字アカウント URL は到達性に注意）。 |
-| `ZEEE_MIGRATION_IMPORT`                                                                                  | アプリ vars                                                | パイロットでは `''`（無効）のまま。移行用インポートは本番切替時の別手順で扱う。                   |
-| `ZEEE_BASE_URL` / `ZEEE_SESSION_COOKIE`                                                                  | スクリプト実行時のローカル環境変数                         | [`scripts/export-do-state.mjs`](../scripts/export-do-state.mjs) 用。値はどこにも保存しない。      |
+| 名前                                                                                                     | 置き場所                                                   | 値の取得元 / 生成方法                                                                                                                                                                                                                                                      |
+| -------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `WORKERD_CLUSTER_KEY`                                                                                    | Secret `workerd-pilot-cluster` / key `key`                 | `openssl rand -hex 32` で生成（32 bytes）。全ノードで同じ値を共有する。                                                                                                                                                                                                    |
+| `WORKERD_CLUSTER_BUCKET`                                                                                 | ConfigMap `workerd-pilot-config`                           | `s3://<PILOT_BUCKET>/<PILOT_PREFIX>`（GCS の場合は `gs://<PILOT_BUCKET>/<PILOT_PREFIX>`）。                                                                                                                                                                                |
+| `AWS_ENDPOINT_URL` / `AWS_REGION`                                                                        | ConfigMap `workerd-pilot-config`                           | パイロット用 S3 互換 endpoint / region（リポジトリにはプレースホルダのみ）。                                                                                                                                                                                               |
+| `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`                                                            | Secret `workerd-pilot-bucket` / `access-key`, `secret-key` | パイロット用バケットにのみ書き込み権限を持つ専用 credential。                                                                                                                                                                                                              |
+| `WORKERD_SHUTDOWN_DELAY_MS` / `WORKERD_CLUSTER_STOP_TIMEOUT_MS`                                          | ConfigMap `workerd-pilot-config`                           | 雛形の既定値（停止中の引き継ぎ時間）を使用。変更する場合は [`infra/workerd-pilot/configmap.yaml`](../infra/workerd-pilot/configmap.yaml) のコメントを参照（`terminationGracePeriodSeconds` 40s に `preStop` 5s が含まれるため、停止引き継ぎ時間は 35s 以内に収めること）。 |
+| `PUBLIC_ORIGIN` / `AUTHZ_ISSUER` / `AUTHZ_CLIENT_ID` / `EMOJI_SERVICE_URL` / `EMOJI_ACCOUNT_PROFILE_URL` | アプリ vars（`void.config.ts` の `cloudflare.vars`）       | パイロット用の到達可能な値に設定し直す。本番値は使わない（絵文字アカウント URL は到達性に注意）。                                                                                                                                                                          |
+| `ZEEE_MIGRATION_IMPORT`                                                                                  | アプリ vars                                                | パイロットでは `''`（無効）のまま。移行用インポートは本番切替時の別手順で扱う。                                                                                                                                                                                            |
+| `ZEEE_BASE_URL` / `ZEEE_SESSION_COOKIE`                                                                  | スクリプト実行時のローカル環境変数                         | [`scripts/export-do-state.mjs`](../scripts/export-do-state.mjs) 用。値はどこにも保存しない。                                                                                                                                                                               |
 
 クラスタキーを保持すると全サービスへのフルアクセスを持つことになるため、
 バケット credential と同じ粒度で管理する。Secret をファイルに落とす場合は git 管理外に置くこと。
@@ -58,7 +58,7 @@
 
 以下をすべて満たした時点でパイロット基盤を「構築完了」とする。チェックはログ / メトリクスを残すこと。
 
-- [ ] 3 ノードすべてで `GET /ready` が **200** を返す（起動中 / 停止中は 503）。
+- [ ] 3 ノードすべてで `GET /ready` が **200** を返す（起動中 / 停止中は 503）。確認は各 Pod の **cluster port 7000** を port-forward して行う（[`infra/workerd-pilot/README.md`](../infra/workerd-pilot/README.md) 手順 6: `kubectl -n <PILOT_NAMESPACE> port-forward deployment/workerd 17900:7000` → `curl http://127.0.0.1:17900/ready`）。クライアント用 Service は 80 → 8080 なので混同しないこと。
 - [ ] **1 ページ = 1 DO** の対応が成立し、同じページが**どのノードからも到達**できる。
 - [ ] オーナー Pod を停止すると、別ノードがバケットへの条件付き書き込みでオーナーシップを**引き継ぐ**。
 - [ ] SIGKILL 後の再起動で、DO の state（Yjs update / 履歴）がバケットから**復元**される。
@@ -80,10 +80,12 @@
    使い方は [`scripts/export-do-state.mjs`](../scripts/export-do-state.mjs) の `--help` と
    [`docs/operations.md`](./operations.md) のバックアップ手順を参照。実セッション cookie は端末内だけで扱う。
 
-3. 計測には zeee 側で準備する `scripts/pilot-measure.mjs`（別タスクで追加予定）を使う。
-   障害注入には同じく `scripts/pilot-fault-injection.mjs`（別タスクで追加予定）を使い、
+3. 計測には zeee 側の [`scripts/pilot-measure.mjs`](../scripts/pilot-measure.mjs)
+   ([PR #46](https://github.com/Zli-UoA/zeee/pull/46))、
+   障害注入には同じく [`scripts/pilot-fault-injection.mjs`](../scripts/pilot-fault-injection.mjs)
+   ([PR #45](https://github.com/Zli-UoA/zeee/pull/45)) を使う（いずれも zeee にマージ済み）。
    **kubectl / バケット / ノード時刻の操作はインフラ側**で実行する。
-   スクリプトの CLI は各ファイルの `--help` を確認すること。
+   具体的なオプションと使い方は各スクリプトの `--help` を参照すること。
 
 4. 結果は 30 日間記録し、[移行調査レポート](./workerd-migration.md) §6 の Go / No-Go ゲート判断に渡す。
 
@@ -98,13 +100,13 @@
 
 ### 障害注入リスト
 
-| シナリオ        | 実行側         | 確認点                                                                                           |
-| --------------- | -------------- | ------------------------------------------------------------------------------------------------ |
-| SIGKILL         | アプリ＋ infra | オーナー即時削除後に DO が別ノードへ移り、書き込みが欠損 / 重複しないこと。                      |
-| rolling restart | アプリ＋ infra | 書き込みを流し続け、失敗リクエスト数 / リビジョンの飛び / WebSocket 1012 の挙動を記録する。      |
-| bucket outage   | **infra**      | バケット endpoint を遮断または誤 credential で再起動し、split-brain にならず復旧すること。       |
-| clock skew      | **infra**      | 1 ノードの時刻を意図的にずらし（非本番のみ）、リース / フェンシングへの影響を確認する（#8830）。 |
-| rollback        | アプリ＋ infra | 前の固定タグへ戻し、バケット形式の前方 / 後方互換性と DO データの可読性を確認する。              |
+| シナリオ        | 実行側         | 確認点                                                                                                                                       |
+| --------------- | -------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| SIGKILL         | アプリ＋ infra | オーナー即時削除後に DO が別ノードへ移り、書き込みが欠損 / 重複しないこと。                                                                  |
+| rolling restart | アプリ＋ infra | 書き込みを流し続け、失敗リクエスト数 / リビジョンの飛び / WebSocket 1012 の挙動を記録する。                                                  |
+| bucket outage   | **infra**      | バケット endpoint を遮断または誤 credential で再起動し、split-brain にならず復旧すること。                                                   |
+| clock skew      | **infra**      | 1 ノードの時刻を意図的にずらし（非本番のみ）、リース / フェンシングへの影響を確認する（https://github.com/cloudflare/workerd/issues/8830）。 |
+| rollback        | アプリ＋ infra | 前の固定タグへ戻し、バケット形式の前方 / 後方互換性と DO データの可読性を確認する。                                                          |
 
 後片付け手順も [`infra/workerd-pilot/README.md`](../infra/workerd-pilot/README.md) に記載されている。
 パイロット用バケット / プレフィックスの削除も忘れないこと（本番バケットは触らない）。
@@ -126,6 +128,7 @@ workerd の cluster mode はまだ `--experimental` で、無停止デプロイ�
 本番は変更せず、まず非本番で 3 ノード + 1 共有バケットのパイロットを 30 日間運用し、
 Go / No-Go ゲートの判断材料（レイテンシ / コスト / フェイルオーバー）を集めたい。
 アプリ側の資料: zeee の `docs/workerd-pilot-handoff.md` / `infra/workerd-pilot/README.md`
+アプリ側の資料（絶対 URL）: https://github.com/Zli-UoA/zeee/blob/main/docs/workerd-pilot-handoff.md / https://github.com/Zli-UoA/zeee/blob/main/infra/workerd-pilot/README.md
 
 ## 作業項目
 
@@ -159,7 +162,9 @@ Go / No-Go ゲートの判断材料（レイテンシ / コスト / フェイル
 
 - この PR は **zeee 内のドキュメントのみ**。コード / CI / マニフェスト / 依存の変更はない。
 - **zoo2-infra の変更 / PR / マージは行わない**。上記 Issue 本文は zeee 内に示すだけとし、
-  Issue の作成は行わない（貼り付け先は zoo2-infra）。
+  Issue の作成は行わない（貼り付け先は zoo2-infra）。zoo2-infra 側に
+  [PR #221](https://github.com/Zli-UoA/zoo2-infra/pull/221) が作成されているが、
+  この依頼書はそのマージを前提とせず、**マージの判断は kashu に委ねる**。
 - 実クラスタ操作・R2 バケット作成・DNS 変更は行わず、実作業はインフラ担当（kashu）に委譲する。
 - 本番 celld 環境（`zeee-fleet` バケット、StatefulSet、本番 deploy workflow）は**変更しない**。
 - [`docs/workerd-migration.md`](./workerd-migration.md) は最終承認済みのため変更しない（この文書からのリンクのみ）。
