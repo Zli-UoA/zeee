@@ -26,7 +26,7 @@ function context(
     enabled?: boolean;
     origin?: string;
     contentLength?: string;
-    body?: Uint8Array;
+    body?: Uint8Array | null;
     stream?: ReadableStream<Uint8Array>;
   } = {},
 ): CloudContext {
@@ -44,7 +44,11 @@ function context(
         return undefined;
       },
       param: (name: string) => (name === 'id' ? 'page-1' : undefined),
-      raw: { body: options.stream ?? bodyStream(options.body ?? new Uint8Array([1, 2])) },
+      raw: {
+        body:
+          options.stream ??
+          (options.body === null ? null : bodyStream(options.body ?? new Uint8Array([1, 2]))),
+      },
     },
     json: (body: unknown, status = 200) => Response.json(body, { status }),
   } as unknown as CloudContext;
@@ -94,6 +98,19 @@ describe('POST /api/pages/:id/import-state', () => {
       'page',
       'page-1',
     );
+  });
+
+  it('rejects an empty body before forwarding it to the durable object', async () => {
+    // An absent body is read as an empty Uint8Array, which is truthy; a
+    // zero-length stream produces the same result. Neither may reach the DO.
+    for (const c of [
+      context({ enabled: true, origin: 'http://127.0.0.1:9876', body: null }),
+      context({ enabled: true, origin: 'http://127.0.0.1:9876', body: new Uint8Array() }),
+    ]) {
+      expect((await post(c)).status).toBe(400);
+    }
+    expect(roomFetch).not.toHaveBeenCalled();
+    expect(recordAudit).toHaveBeenCalledTimes(2);
   });
 
   it('audits every authenticated attempt, including durable-object rejections', async () => {

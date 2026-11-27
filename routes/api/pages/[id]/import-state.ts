@@ -41,7 +41,9 @@ export const POST = defineHandler(async (c) => {
     }
 
     if (tooLarge) return jsonError(c, 413, 'state is too large');
-    if (!bytes) return jsonError(c, 400, 'invalid state');
+    // An absent body yields an empty Uint8Array (an object, so `!bytes` is
+    // false); reject zero-length input here instead of forwarding it to the DO.
+    if (!bytes || bytes.length === 0) return jsonError(c, 400, 'invalid state');
 
     return await roomFetch(pageId, '/import-state', user, {
       method: 'POST',
