@@ -197,6 +197,21 @@ function importState(pageId, bytes) {
   });
 }
 
+// A closed client socket can linger on the DO side for a short while. Retry
+// the import (which is gated on getWebSockets()) until the room accepts it
+// instead of relying on a fixed sleep.
+async function importAfterDisconnect(pageId, bytes) {
+  const deadline = Date.now() + 10_000;
+  for (;;) {
+    const response = await importState(pageId, bytes);
+    if (response.status !== 409) return response;
+    if (Date.now() >= deadline) {
+      throw new Error(`import was still blocked after the client closed: ${await response.text()}`);
+    }
+    await sleep(100);
+  }
+}
+
 async function main() {
   start(true);
   await waitForServer();
@@ -339,9 +354,16 @@ async function main() {
     throw new Error('a rejected import changed the state');
   }
   watcher.socket.close();
-  await sleep(300);
+  await new Promise((resolve, reject) => {
+    if (watcher.socket.readyState === WebSocket.CLOSED) {
+      resolve();
+      return;
+    }
+    watcher.socket.once('close', resolve);
+    watcher.socket.once('error', reject);
+  });
 
-  response = await importState(targetId, exported);
+  response = await importAfterDisconnect(targetId, exported);
   if (!response.ok)
     throw new Error(`state import failed: ${response.status} ${await response.text()}`);
   const importedText = await readState(targetId);

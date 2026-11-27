@@ -1,7 +1,21 @@
-import { describe, expect, it, vi } from 'vite-plus/test';
+import { beforeEach, describe, expect, it, vi } from 'vite-plus/test';
 import * as Y from 'yjs';
 import { decodeBase64, encodeBase64 } from '../src/shared/base64';
 import type { Env } from '../src/server/types';
+
+const writes = vi.hoisted(() => ({
+  materialize: vi.fn(async (_db: unknown, _pageId: string, _markdown: string) => undefined),
+  revision: vi.fn(
+    async (
+      _db: unknown,
+      _pageId: string,
+      _markdown: string,
+      _actorId: string | null,
+      _manual: boolean,
+    ) => 2,
+  ),
+  latest: vi.fn(async () => null),
+}));
 
 vi.mock('cloudflare:workers', () => ({
   DurableObject: class {
@@ -13,9 +27,9 @@ vi.mock('cloudflare:workers', () => ({
 }));
 vi.mock('void/durable', () => ({ defineDurableObject: (definition: unknown) => definition }));
 vi.mock('../src/server/db', () => ({
-  createRevision: vi.fn().mockResolvedValue(2),
-  latestRevision: vi.fn().mockResolvedValue(null),
-  materializePage: vi.fn().mockResolvedValue(undefined),
+  createRevision: writes.revision,
+  latestRevision: writes.latest,
+  materializePage: writes.materialize,
 }));
 
 import { PageRoomObject } from '../durable-objects/page-room';
@@ -49,6 +63,7 @@ function setup(initial: Uint8Array[] = [], initialSnapshot?: Uint8Array, connect
       throw error;
     }
   });
+  const setAlarm = vi.fn().mockResolvedValue(undefined);
   const peer = { send: vi.fn() } as unknown as WebSocket;
   const send = vi.fn();
   const socket = {
@@ -60,12 +75,23 @@ function setup(initial: Uint8Array[] = [], initialSnapshot?: Uint8Array, connect
     storage: {
       sql: { exec },
       transactionSync,
-      setAlarm: vi.fn().mockResolvedValue(undefined),
+      setAlarm,
     },
     getWebSockets: () => connected ?? [socket, peer],
   } as unknown as DurableObjectState;
   const room = new PageRoomObject(ctx, {} as Env);
-  return { room, rows, socket, send, peer, exec, transactionSync, snapshot: () => snapshot };
+  return {
+    room,
+    rows,
+    socket,
+    send,
+    peer,
+    exec,
+    transactionSync,
+    ctx,
+    setAlarm,
+    snapshot: () => snapshot,
+  };
 }
 
 function updateFrom(text: string): Uint8Array {
@@ -115,6 +141,30 @@ function importRequest(body: ArrayBuffer, headers: Record<string, string> = {}):
     body,
   });
 }
+
+function replaceRequest(markdown: string): Request {
+  return new Request('https://zeee.test/api/pages/page-1/replace', {
+    method: 'POST',
+    headers: { 'x-zeee-user': 'user-1' },
+    body: JSON.stringify({ markdown }),
+  });
+}
+
+function snapshotRequest(): Request {
+  return new Request('https://zeee.test/api/pages/page-1/snapshot', {
+    method: 'POST',
+    headers: { 'x-zeee-user': 'user-1' },
+  });
+}
+
+beforeEach(() => {
+  writes.materialize.mockReset();
+  writes.materialize.mockResolvedValue(undefined);
+  writes.revision.mockReset();
+  writes.revision.mockResolvedValue(2);
+  writes.latest.mockReset();
+  writes.latest.mockResolvedValue(null);
+});
 
 describe('PageRoom durable acknowledgements', () => {
   it('persists before ack and deduplicates repeated updates, including after room restart', async () => {
@@ -370,5 +420,89 @@ describe('PageRoom durable acknowledgements', () => {
     expect(await readState(harness)).toBe('original');
     expect(harness.rows).toHaveLength(1);
     expect(harness.snapshot()).toBeNull();
+  });
+
+  it('awaits an in-flight replace before materializing the imported state', async () => {
+    const harness = setup([updateFrom('old')], undefined, []);
+    expect(await readState(harness)).toBe('old');
+
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let started!: () => void;
+    const replaceStarted = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    writes.materialize.mockImplementationOnce(async () => {
+      started();
+      await gate;
+    });
+
+    const replacing = harness.room.fetch(replaceRequest('replacement'));
+    await replaceStarted;
+    const importing = harness.room.fetch(importRequest(arrayBuffer(updateFrom('imported'))));
+    release();
+    const [replaceResponse, importResponse] = await Promise.all([replacing, importing]);
+
+    expect(replaceResponse.status).toBe(200);
+    expect(importResponse.status).toBe(200);
+    // The replacement's D1 write happens first, but the import wins the final
+    // write instead of racing it.
+    expect(writes.materialize.mock.calls.map((call) => call[2])).toEqual([
+      'replacement',
+      'imported',
+    ]);
+    expect(writes.revision.mock.calls.map((call) => call[2])).toEqual(['replacement', 'imported']);
+    expect(await readState(harness)).toBe('imported');
+  });
+
+  it('rejects replace and snapshot queued while an import is materializing', async () => {
+    const harness = setup([updateFrom('old')], undefined, []);
+    expect(await readState(harness)).toBe('old');
+
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let started!: () => void;
+    const importStarted = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    writes.materialize.mockImplementationOnce(async (_db, _pageId, markdown) => {
+      if (markdown !== 'imported') return;
+      started();
+      await gate;
+    });
+
+    const importing = harness.room.fetch(importRequest(arrayBuffer(updateFrom('imported'))));
+    await importStarted;
+    const replacing = harness.room.fetch(replaceRequest('replacement'));
+    const snapshotting = harness.room.fetch(snapshotRequest());
+    release();
+    const [importResponse, replaceResponse, snapshotResponse] = await Promise.all([
+      importing,
+      replacing,
+      snapshotting,
+    ]);
+
+    expect(importResponse.status).toBe(200);
+    expect(replaceResponse.status).toBe(409);
+    expect(snapshotResponse.status).toBe(409);
+    expect(writes.materialize.mock.calls.map((call) => call[2])).toEqual(['imported']);
+    expect(writes.revision.mock.calls.map((call) => call[2])).toEqual(['imported']);
+    expect(await readState(harness)).toBe('imported');
+  });
+
+  it('schedules an alarm when a D1 write fails after the import swap', async () => {
+    const harness = setup([updateFrom('old')], undefined, []);
+    expect(await readState(harness)).toBe('old');
+    writes.materialize.mockRejectedValueOnce(new Error('D1 down'));
+
+    await expect(
+      harness.room.fetch(importRequest(arrayBuffer(updateFrom('imported')))),
+    ).rejects.toThrow('D1 down');
+    expect(harness.setAlarm.mock.calls).toHaveLength(1);
+    expect(await readState(harness)).toBe('imported');
   });
 });

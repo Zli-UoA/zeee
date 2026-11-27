@@ -9,6 +9,7 @@ import {
   MAX_STATE_IMPORT_BYTES,
   PayloadTooLargeError,
   readBoundedBytes,
+  STATE_IMPORT_TIMEOUT_MS,
 } from '../src/shared/yjs';
 
 type ClientMessage =
@@ -111,10 +112,20 @@ export class PageRoomObject extends DurableObject<Env> {
       });
     }
     if (url.pathname.endsWith('/snapshot') && request.method === 'POST') {
-      return this.snapshot(userId);
+      // Both routes write D1, so they must not interleave with an import's
+      // materialization/revision or with each other. The flag is checked here
+      // (not only inside the queue) because a request accepted during an
+      // import must not run after the import clears it.
+      if (this.importing) {
+        return Response.json({ error: 'import in progress' }, { status: 409 });
+      }
+      return this.serialize(() => this.snapshot(userId));
     }
     if (url.pathname.endsWith('/replace') && request.method === 'POST') {
-      return this.replace(request, userId, userName);
+      if (this.importing) {
+        return Response.json({ error: 'import in progress' }, { status: 409 });
+      }
+      return this.serialize(() => this.replace(request, userId, userName));
     }
     if (url.pathname.endsWith('/import-state') && request.method === 'POST') {
       return this.importState(request, userId, userName);
@@ -206,10 +217,16 @@ export class PageRoomObject extends DurableObject<Env> {
       );
       this.lastActorId = actorId;
     }
-    if (!this.alarmScheduled) {
-      this.alarmScheduled = true;
-      void this.ctx.storage.setAlarm(Date.now() + MATERIALIZE_DEBOUNCE_MS);
-    }
+    this.scheduleMaterializeAlarm();
+  }
+
+  private scheduleMaterializeAlarm(): void {
+    if (this.alarmScheduled) return;
+    this.alarmScheduled = true;
+    void this.ctx.storage.setAlarm(Date.now() + MATERIALIZE_DEBOUNCE_MS).catch(() => {
+      // Allow a later write to retry scheduling instead of wedging the flag.
+      this.alarmScheduled = false;
+    });
   }
 
   private broadcast(payload: unknown, exclude?: WebSocket): void {
@@ -317,7 +334,11 @@ export class PageRoomObject extends DurableObject<Env> {
 
       let bytes: Uint8Array;
       try {
-        bytes = await readBoundedBytes(request.body);
+        bytes = await readBoundedBytes(
+          request.body,
+          MAX_STATE_IMPORT_BYTES,
+          AbortSignal.timeout(STATE_IMPORT_TIMEOUT_MS),
+        );
       } catch (error) {
         if (error instanceof PayloadTooLargeError) {
           return Response.json({ error: 'state is too large' }, { status: 413 });
@@ -378,16 +399,19 @@ export class PageRoomObject extends DurableObject<Env> {
     this.lastSnapshotAt = now;
     // No broadcast: connected clients were rejected with 409 above.
 
-    await materializePage(this.env.DB, this.pageId, this.text.toJSON(), userId);
-    this.lastSearchAt = Date.now();
-    const version = await createRevision(
-      this.env.DB,
-      this.pageId,
-      this.text.toJSON(),
-      userId,
-      true,
-    );
-    return Response.json({ version, by: userName });
+    const markdown = this.text.toJSON();
+    try {
+      await materializePage(this.env.DB, this.pageId, markdown, userId);
+      this.lastSearchAt = Date.now();
+      const version = await createRevision(this.env.DB, this.pageId, markdown, userId, true);
+      return Response.json({ version, by: userName });
+    } catch (error) {
+      // The DO already holds the imported state and snapshot. If D1 is down,
+      // schedule materialization so page_body is not stuck on the old text
+      // until somebody edits the page again.
+      this.scheduleMaterializeAlarm();
+      throw error;
+    }
   }
 
   private async replace(request: Request, userId: string, userName: string): Promise<Response> {

@@ -8,6 +8,7 @@ import {
   MAX_STATE_IMPORT_BYTES,
   PayloadTooLargeError,
   readBoundedBytes,
+  STATE_IMPORT_TIMEOUT_MS,
 } from '../../../../src/shared/yjs';
 
 export const POST = defineHandler(async (c) => {
@@ -29,7 +30,11 @@ export const POST = defineHandler(async (c) => {
         tooLarge = true;
       } else {
         // Count bytes while reading: Content-Length is advisory only.
-        bytes = await readBoundedBytes(c.req.raw.body);
+        bytes = await readBoundedBytes(
+          c.req.raw.body,
+          MAX_STATE_IMPORT_BYTES,
+          AbortSignal.timeout(STATE_IMPORT_TIMEOUT_MS),
+        );
       }
     } catch (error) {
       if (error instanceof PayloadTooLargeError) tooLarge = true;

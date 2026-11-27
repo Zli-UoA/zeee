@@ -5,7 +5,15 @@ import type { Env } from '../src/server/types';
 
 const writes = vi.hoisted(() => ({
   materialize: vi.fn(async (_db: unknown, _pageId: string, _markdown: string) => undefined),
-  revision: vi.fn(async () => 2),
+  revision: vi.fn(
+    async (
+      _db: unknown,
+      _pageId: string,
+      _markdown: string,
+      _actorId: string | null,
+      _manual: boolean,
+    ) => 2,
+  ),
   latest: vi.fn(async () => null),
 }));
 
@@ -49,6 +57,7 @@ function harness(connected = false, seed: Uint8Array[] = []) {
     send: vi.fn(),
     deserializeAttachment: () => null,
   } as unknown as WebSocket;
+  const setAlarm = vi.fn().mockResolvedValue(undefined);
   const ctx = {
     id: { name: 'page-1' },
     storage: {
@@ -77,7 +86,7 @@ function harness(connected = false, seed: Uint8Array[] = []) {
           throw error;
         }
       },
-      setAlarm: vi.fn().mockResolvedValue(undefined),
+      setAlarm,
     },
     getWebSockets: () => (connected ? [socket] : []),
     setWebSocketAutoResponse: () => {},
@@ -98,6 +107,7 @@ function harness(connected = false, seed: Uint8Array[] = []) {
     sqlite,
     ctx,
     socket,
+    setAlarm,
   };
 }
 
@@ -118,6 +128,21 @@ function importRequest(bytes: Uint8Array): Request {
     method: 'POST',
     headers: { 'x-zeee-user': 'user-1' },
     body: arrayBuffer(bytes),
+  });
+}
+
+function replaceRequest(markdown: string): Request {
+  return new Request('https://zeee.test/pages/page-1/replace', {
+    method: 'POST',
+    headers: { 'x-zeee-user': 'user-1' },
+    body: JSON.stringify({ markdown }),
+  });
+}
+
+function snapshotRequest(): Request {
+  return new Request('https://zeee.test/pages/page-1/snapshot', {
+    method: 'POST',
+    headers: { 'x-zeee-user': 'user-1' },
   });
 }
 
@@ -248,5 +273,129 @@ describe('import-state with real SQLite storage', () => {
     expect(h.sqlite.prepare('SELECT COUNT(*) AS count FROM doc_snapshot').get()).toMatchObject({
       count: 1,
     });
+  });
+
+  it('serializes a gated replace ahead of the import so D1 ends up imported', async () => {
+    const h = harness(false, [updateFrom('old content')]);
+    expect(await stateText(h.room)).toBe('old content');
+
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let started!: () => void;
+    const replaceStarted = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    writes.materialize.mockImplementationOnce(async () => {
+      started();
+      await gate;
+    });
+
+    const replacing = h.room.fetch(replaceRequest('restored content'));
+    await replaceStarted;
+    const importing = h.room.fetch(importRequest(updateFrom('imported content')));
+    release();
+    const [replaceResponse, importResponse] = await Promise.all([replacing, importing]);
+
+    expect(replaceResponse.status).toBe(200);
+    expect(importResponse.status).toBe(200);
+    expect(writes.materialize.mock.calls.map((call) => call[2])).toEqual([
+      'restored content',
+      'imported content',
+    ]);
+    expect(writes.revision.mock.calls.map((call) => call[2])).toEqual([
+      'restored content',
+      'imported content',
+    ]);
+    expect(await stateText(h.restart())).toBe('imported content');
+  });
+
+  it('serializes a gated snapshot ahead of the import so D1 ends up imported', async () => {
+    const h = harness(false, [updateFrom('old content')]);
+    expect(await stateText(h.room)).toBe('old content');
+
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let started!: () => void;
+    const snapshotStarted = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    writes.materialize.mockImplementationOnce(async () => {
+      started();
+      await gate;
+    });
+
+    const snapshotting = h.room.fetch(snapshotRequest());
+    await snapshotStarted;
+    const importing = h.room.fetch(importRequest(updateFrom('imported content')));
+    release();
+    const [snapshotResponse, importResponse] = await Promise.all([snapshotting, importing]);
+
+    expect(snapshotResponse.status).toBe(200);
+    expect(importResponse.status).toBe(200);
+    expect(writes.materialize.mock.calls.map((call) => call[2])).toEqual([
+      'old content',
+      'imported content',
+    ]);
+    expect(writes.revision.mock.calls.map((call) => call[2])).toEqual([
+      'old content',
+      'imported content',
+    ]);
+    expect(await stateText(h.restart())).toBe('imported content');
+  });
+
+  it('rejects restore/snapshot during an import and keeps the imported D1 write last', async () => {
+    const h = harness(false, [updateFrom('old content')]);
+    expect(await stateText(h.room)).toBe('old content');
+
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let started!: () => void;
+    const importStarted = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    writes.materialize.mockImplementationOnce(async (_db, _pageId, markdown) => {
+      if (markdown !== 'imported content') return;
+      started();
+      await gate;
+    });
+
+    const importing = h.room.fetch(importRequest(updateFrom('imported content')));
+    await importStarted;
+    const restoring = h.room.fetch(replaceRequest('restored content'));
+    const snapshotting = h.room.fetch(snapshotRequest());
+    release();
+    const [importResponse, restoreResponse, snapshotResponse] = await Promise.all([
+      importing,
+      restoring,
+      snapshotting,
+    ]);
+
+    expect(importResponse.status).toBe(200);
+    expect(restoreResponse.status).toBe(409);
+    expect(snapshotResponse.status).toBe(409);
+    expect(writes.materialize.mock.calls.map((call) => call[2])).toEqual(['imported content']);
+    expect(writes.revision.mock.calls.map((call) => call[2])).toEqual(['imported content']);
+    expect(await stateText(h.restart())).toBe('imported content');
+  });
+
+  it('rematerializes the imported state from the recovery alarm after a D1 failure', async () => {
+    const h = harness();
+    writes.materialize.mockRejectedValueOnce(new Error('D1 down'));
+
+    await expect(h.room.fetch(importRequest(updateFrom('imported content')))).rejects.toThrow(
+      'D1 down',
+    );
+    expect(h.setAlarm.mock.calls).toHaveLength(1);
+    expect(await stateText(h.room)).toBe('imported content');
+
+    await h.room.alarm();
+    expect(writes.materialize.mock.calls.at(-1)?.[2]).toBe('imported content');
+    expect(writes.revision.mock.calls.at(-1)?.[2]).toBe('imported content');
   });
 });
