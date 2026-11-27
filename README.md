@@ -80,6 +80,7 @@ pnpm build:celld # 本番と同じ celld 向けビルド
 - Secrets: `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`
 - Vars: `CELLD_BUCKET`, `S3_ENDPOINT`, `AWS_REGION`（未設定時は workflow 内の既定値）
 - `pnpm build:celld` の成果物を検証してから `celld deploy dist` を実行
+- `ZEEE_MIGRATION_IMPORT` は本番に絶対に入れない（空文字のみ許可。`dist/wrangler.json` の検証で弾く）
 - デプロイ後に `https://zeee.zli.works/api/health` を最大 30 回確認
 
 R2 の secrets が未設定の場合、deploy は失敗ではなく skip され、GitHub Actions の Summary に案内が出る。初回は Environment `production` の secrets を設定したうえで `workflow_dispatch` を実行する。
