@@ -1,7 +1,7 @@
-import { describe, expect, it } from 'vite-plus/test';
+import { describe, expect, it, vi } from 'vite-plus/test';
 
 // @ts-expect-error - the CLI is plain .mjs and has no TypeScript declarations.
-import { buildKubectlArgs, main, run } from '../scripts/pilot-fault-injection.mjs';
+import { buildKubectlArgs, HELP, main, run } from '../scripts/pilot-fault-injection.mjs';
 
 type Probe = { status: number; body?: unknown };
 type FetchImpl = (input: string | URL, init?: RequestInit) => Promise<Response>;
@@ -16,6 +16,7 @@ type Deps = {
   sleep?: (ms: number) => Promise<void>;
   recoveryTimeoutMs?: number;
   pollIntervalMs?: number;
+  checkTimeoutMs?: number;
 };
 
 const OK: Probe = { status: 200, body: { ok: true } };
@@ -70,6 +71,7 @@ describe('pilot-fault-injection', () => {
     ]);
     expect(buildKubectlArgs('rollback', names)).toEqual([
       ['-n', 'workerd-pilot', 'rollout', 'undo', 'deployment/workerd'],
+      ['-n', 'workerd-pilot', 'rollout', 'status', 'deployment/workerd', '--timeout=180s'],
     ]);
   });
 
@@ -109,7 +111,7 @@ describe('pilot-fault-injection', () => {
     ]);
   });
 
-  it('runs rollout undo for rollback', async () => {
+  it('runs rollout undo followed by rollout status for rollback', async () => {
     const { runner, calls } = fakeRunner();
     const { fetchImpl } = mockProbes([OK]);
     expect(
@@ -121,7 +123,10 @@ describe('pilot-fault-injection', () => {
         logError: () => {},
       }),
     ).toBe(0);
-    expect(calls).toEqual([['-n', 'workerd-pilot', 'rollout', 'undo', 'deployment/workerd']]);
+    expect(calls).toEqual([
+      ['-n', 'workerd-pilot', 'rollout', 'undo', 'deployment/workerd'],
+      ['-n', 'workerd-pilot', 'rollout', 'status', 'deployment/workerd', '--timeout=180s'],
+    ]);
   });
 
   it('check is read-only and probes both endpoints', async () => {
@@ -305,5 +310,66 @@ describe('pilot-fault-injection', () => {
       }),
     ).toBe(1);
     expect(errors[0]).toContain('GET /ready: HTTP 503');
+  });
+
+  it('prints HELP and exits 0 even without a subcommand (P2-1)', async () => {
+    for (const argv of [['--help'], ['-h']]) {
+      const { messages, log } = captureLogs();
+      expect(await run(argv, { log, logError: () => {} })).toBe(0);
+      expect(messages).toEqual([HELP]);
+      expect(HELP).toContain('grace-period=0 --force');
+      expect(HELP).toContain('HEURISTIC');
+    }
+  });
+
+  it('rejects non-pilot substrings anywhere in the base URL, including the path (P2-4)', async () => {
+    for (const url of ['http://127.0.0.1:17900/prod-api', 'http://prod.example.test:17900']) {
+      const errors: string[] = [];
+      const { runner, calls } = fakeRunner();
+      const { fetchImpl, paths } = mockProbes([OK]);
+      expect(
+        await run(['check'], {
+          env: baseEnv({ PILOT_BASE_URL: url }),
+          runner,
+          fetchImpl,
+          log: () => {},
+          logError: (message: string) => errors.push(message),
+        }),
+      ).toBe(1);
+      expect(errors[0]).toContain('PILOT_BASE_URL looks non-pilot');
+      expect(calls).toEqual([]);
+      expect(paths).toEqual([]);
+    }
+  });
+
+  it('applies checkTimeoutMs to every probe with an independent signal (P2-2)', async () => {
+    const timeoutSpy = vi.spyOn(AbortSignal, 'timeout');
+    try {
+      const signals: AbortSignal[] = [];
+      const fetchImpl: FetchImpl = async (_input, init) => {
+        if (init?.signal) signals.push(init.signal as AbortSignal);
+        return Response.json({ ok: true }, { status: 200 });
+      };
+      const { runner } = fakeRunner();
+      expect(
+        await run(['kill-pod', 'workerd-abc', '--confirm'], {
+          env: baseEnv(),
+          runner,
+          fetchImpl,
+          log: () => {},
+          checkTimeoutMs: 2_345,
+        }),
+      ).toBe(0);
+
+      // pre-check (2 probes) + recovery check (2 probes) all use the custom timeout.
+      expect(timeoutSpy).toHaveBeenCalledTimes(4);
+      expect(timeoutSpy).toHaveBeenCalledWith(2_345);
+      expect(timeoutSpy).not.toHaveBeenCalledWith(5_000);
+      // Each probe gets its own signal instead of sharing one 5s budget.
+      expect(signals).toHaveLength(4);
+      expect(new Set(signals).size).toBe(4);
+    } finally {
+      timeoutSpy.mockRestore();
+    }
   });
 });
