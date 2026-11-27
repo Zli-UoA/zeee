@@ -15,6 +15,6 @@ data:
   AWS_ENDPOINT_URL: 'https://REPLACE_WITH_S3_COMPATIBLE_ENDPOINT'
   AWS_REGION: 'REPLACE_WITH_REGION'
   # 停止中の引き継ぎ時間。deployment.yaml の terminationGracePeriodSeconds
-  # (40s) と preStop (5s) の合計内に収めること。
+  # (40s) には preStop (5s) も含まれるため、preStop を引いた 35s 以内に収めること。
   WORKERD_SHUTDOWN_DELAY_MS: '20000'
   WORKERD_CLUSTER_STOP_TIMEOUT_MS: '8000'
