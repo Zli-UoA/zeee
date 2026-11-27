@@ -5,8 +5,13 @@ import { dirname, join } from 'node:path';
 // Usage: node scripts/validate-deploy-config.mjs [dist/wrangler.json]
 const configPath = process.argv[2] ?? 'dist/wrangler.json';
 
+// GitHub Actions workflow commands need message data escaped so that user-
+// controlled values cannot inject extra commands or break the log line.
+const escapeMessageData = (message) =>
+  String(message).replaceAll('%', '%25').replaceAll('\r', '%0D').replaceAll('\n', '%0A');
+
 const fail = (message) => {
-  console.error(`::error::${message}`);
+  console.error(`::error::${escapeMessageData(message)}`);
   process.exit(1);
 };
 
