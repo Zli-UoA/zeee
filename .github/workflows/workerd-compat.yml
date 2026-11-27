@@ -4,10 +4,11 @@ name: workerd compat daily
 # バケット形式や peer protocol が数週間単位で変わるため、pinned バイナリで
 # ビルド＋スモークを毎日流し、関連 upstream issue / release の状態を残す。
 #
-# この workflow は must-pass ではない。ジョブを落とすのは smoke ステップだけ
-# なので、通知が飛ぶのは「pinned workerd でスモークが壊れたとき」だけになる。
-# upstream の API 参照は best-effort（continue-on-error + フォールバック）で、
-# GitHub API の一時的な不調では落とさない（通知ノイズを避ける）。
+# この workflow は must-pass ではない。upstream の API 参照は best-effort
+# （continue-on-error + フォールバック）で、GitHub API の一時的な不調では
+# 落とさない（通知ノイズを避ける）。ただし job を落とすステップもあり、
+# pnpm install / pnpm build:celld / pinned workerd の install と smoke が
+# 失敗した場合は fail して通知が飛ぶ。
 on:
   schedule:
     - cron: '0 3 * * *'
@@ -17,7 +18,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: workerd-compat-daily-${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -83,5 +84,5 @@ jobs:
             echo "| [issue #8155](https://github.com/cloudflare/workerd/issues/8155) | \`${issue}\` |"
             echo "| [PR #8176](https://github.com/cloudflare/workerd/pulls/8176) | \`${pr}\` |"
             echo
-            echo '通知は smoke が失敗したときだけです。API 参照の失敗は diagnostic なため job は落としません。'
+            echo 'API 参照の失敗は diagnostic なため job は落としません。install / build / smoke の失敗では job が落ちます。'
           } >> "$GITHUB_STEP_SUMMARY"
