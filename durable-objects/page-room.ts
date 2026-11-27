@@ -4,7 +4,7 @@ import { defineDurableObject } from 'void/durable';
 import { createRevision, latestRevision, materializePage } from '../src/server/db';
 import type { Env } from '../src/server/types';
 import { decodeBase64, encodeBase64 } from '../src/shared/base64';
-import { containsUpdate } from '../src/shared/yjs';
+import { containsUpdate, MAX_STATE_IMPORT_BYTES } from '../src/shared/yjs';
 
 type ClientMessage =
   | { type: 'sync'; stateVector: string }
@@ -18,8 +18,8 @@ const FIVE_MINUTES = 5 * 60 * 1000;
 const SNAPSHOT_UPDATES = 300;
 
 export class PageRoomObject extends DurableObject<Env> {
-  private readonly doc = new Y.Doc();
-  private readonly text = this.doc.getText('markdown');
+  private doc = new Y.Doc();
+  private text = this.doc.getText('markdown');
   private readonly ready: Promise<void>;
   private pageId: string;
   private lastActorId: string | null = null;
@@ -103,6 +103,9 @@ export class PageRoomObject extends DurableObject<Env> {
     }
     if (url.pathname.endsWith('/replace') && request.method === 'POST') {
       return this.replace(request, userId, userName);
+    }
+    if (url.pathname.endsWith('/import-state') && request.method === 'POST') {
+      return this.importState(request, userId, userName);
     }
     return new Response('Not found', { status: 404 });
   }
@@ -254,6 +257,79 @@ export class PageRoomObject extends DurableObject<Env> {
     this.lastSearchAt = Date.now();
     const version = await createRevision(this.env.DB, this.pageId, markdown, userId, true);
     return Response.json({ version, markdown });
+  }
+
+  /**
+   * Migration-only import of a raw Yjs update (the bytes returned by GET /state).
+   * Unlike /replace this swaps the whole document, preserving the source client
+   * ids instead of replaying a markdown diff through the current doc.
+   */
+  private async importState(request: Request, userId: string, userName: string): Promise<Response> {
+    const declaredLength = Number(request.headers.get('content-length') ?? '0');
+    if (Number.isFinite(declaredLength) && declaredLength > MAX_STATE_IMPORT_BYTES) {
+      return Response.json({ error: 'state is too large' }, { status: 413 });
+    }
+
+    let bytes: Uint8Array;
+    try {
+      const buffer = await request.arrayBuffer();
+      if (buffer.byteLength > MAX_STATE_IMPORT_BYTES) {
+        return Response.json({ error: 'state is too large' }, { status: 413 });
+      }
+      bytes = new Uint8Array(buffer);
+    } catch {
+      return Response.json({ error: 'invalid state' }, { status: 400 });
+    }
+
+    // Validate on a separate doc first. Invalid bytes must never reach the
+    // live doc or the durable log, just like the containsUpdate check in
+    // webSocketMessage.
+    const replacement = new Y.Doc();
+    try {
+      Y.applyUpdate(replacement, bytes, 'import');
+    } catch {
+      replacement.destroy();
+      return Response.json({ error: 'invalid state' }, { status: 400 });
+    }
+
+    const now = Date.now();
+    try {
+      // The imported state becomes the only source of truth. Clearing the log
+      // and overwriting the snapshot together keeps load() from replaying the
+      // previous document on the next start.
+      this.ctx.storage.sql.exec('DELETE FROM doc_update');
+      this.ctx.storage.sql.exec(
+        `INSERT INTO doc_snapshot (id, state, seq, created_at) VALUES (1, ?, 0, ?)
+         ON CONFLICT(id) DO UPDATE SET state = excluded.state, seq = excluded.seq, created_at = excluded.created_at`,
+        bytes,
+        now,
+      );
+      this.ctx.storage.sql.exec(
+        'INSERT INTO doc_actor (id, actor_id) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET actor_id = excluded.actor_id',
+        userId,
+      );
+    } catch (error) {
+      replacement.destroy();
+      throw error;
+    }
+
+    this.doc.destroy();
+    this.doc = replacement;
+    this.text = replacement.getText('markdown');
+    this.lastActorId = userId;
+    this.lastSnapshotAt = now;
+    this.broadcast({ type: 'update', update: encodeBase64(bytes) });
+
+    await materializePage(this.env.DB, this.pageId, this.text.toJSON(), userId);
+    this.lastSearchAt = Date.now();
+    const version = await createRevision(
+      this.env.DB,
+      this.pageId,
+      this.text.toJSON(),
+      userId,
+      true,
+    );
+    return Response.json({ version, by: userName });
   }
 
   private async replace(request: Request, userId: string, userName: string): Promise<Response> {

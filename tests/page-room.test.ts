@@ -12,15 +12,29 @@ vi.mock('cloudflare:workers', () => ({
   },
 }));
 vi.mock('void/durable', () => ({ defineDurableObject: (definition: unknown) => definition }));
+vi.mock('../src/server/db', () => ({
+  createRevision: vi.fn().mockResolvedValue(2),
+  latestRevision: vi.fn().mockResolvedValue(null),
+  materializePage: vi.fn().mockResolvedValue(undefined),
+}));
 
 import { PageRoomObject } from '../durable-objects/page-room';
 
-function setup(initial: Uint8Array[] = []) {
+function setup(initial: Uint8Array[] = [], initialSnapshot?: Uint8Array) {
+  let snapshot = initialSnapshot ?? null;
   const rows = [...initial];
   const exec = vi.fn((query: string, ...args: unknown[]) => {
     if (query.startsWith('INSERT INTO doc_update')) rows.push(args[0] as Uint8Array);
+    if (query.startsWith('DELETE FROM doc_update')) rows.length = 0;
+    if (query.startsWith('INSERT INTO doc_snapshot')) snapshot = args[0] as Uint8Array;
     return {
-      toArray: () => (query.startsWith('SELECT data') ? rows.map((data) => ({ data })) : []),
+      toArray: () => {
+        if (query.startsWith('SELECT data')) return rows.map((data) => ({ data }));
+        if (query.startsWith('SELECT state')) {
+          return snapshot ? [{ state: snapshot, created_at: Date.now() }] : [];
+        }
+        return [];
+      },
     };
   });
   const peer = { send: vi.fn() };
@@ -35,7 +49,7 @@ function setup(initial: Uint8Array[] = []) {
     getWebSockets: () => [socket, peer],
   } as unknown as DurableObjectState;
   const room = new PageRoomObject(ctx, {} as Env);
-  return { room, rows, socket, send, peer, exec };
+  return { room, rows, socket, send, peer, exec, snapshot: () => snapshot };
 }
 
 function updateFrom(text: string): Uint8Array {
@@ -57,17 +71,33 @@ async function send(harness: ReturnType<typeof setup>, update: Uint8Array, clien
   );
 }
 
-async function readState(harness: ReturnType<typeof setup>): Promise<string> {
+async function readStateBytes(harness: ReturnType<typeof setup>): Promise<Uint8Array> {
   const response = await harness.room.fetch(
     new Request('https://zeee.test/api/pages/page-1/state', {
       headers: { 'x-zeee-user': 'user-1' },
     }),
   );
+  return new Uint8Array(await response.arrayBuffer());
+}
+
+async function readState(harness: ReturnType<typeof setup>): Promise<string> {
   const doc = new Y.Doc();
-  Y.applyUpdate(doc, new Uint8Array(await response.arrayBuffer()));
+  Y.applyUpdate(doc, await readStateBytes(harness));
   const text = doc.getText('markdown').toJSON();
   doc.destroy();
   return text;
+}
+
+function arrayBuffer(bytes: Uint8Array): ArrayBuffer {
+  return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+}
+
+function importRequest(body: ArrayBuffer, headers: Record<string, string> = {}): Request {
+  return new Request('https://zeee.test/api/pages/page-1/import-state', {
+    method: 'POST',
+    headers: { 'x-zeee-user': 'user-1', ...headers },
+    body,
+  });
 }
 
 describe('PageRoom durable acknowledgements', () => {
@@ -191,5 +221,81 @@ describe('PageRoom durable acknowledgements', () => {
     expect(response.type).toBe('sync');
     expect(empty.getText('markdown').toJSON()).toBe('legacy');
     empty.destroy();
+  });
+
+  it('imports a raw Yjs state and keeps it after a restart', async () => {
+    const harness = setup([updateFrom('old')]);
+    expect(await readState(harness)).toBe('old');
+
+    const state = updateFrom('imported');
+    const response = await harness.room.fetch(importRequest(arrayBuffer(state)));
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ by: 'someone', version: 2 });
+    expect(await readState(harness)).toBe('imported');
+    // The old update log is replaced by the imported snapshot.
+    expect(harness.rows).toHaveLength(0);
+    expect(harness.snapshot()).toEqual(state);
+
+    const restarted = setup([], harness.snapshot()!);
+    expect(await readState(restarted)).toBe('imported');
+  });
+
+  it('preserves the source client ids when importing state', async () => {
+    const source = new Y.Doc();
+    source.getText('markdown').insert(0, 'client ids');
+    const state = Y.encodeStateAsUpdate(source);
+    source.destroy();
+
+    const harness = setup();
+    const response = await harness.room.fetch(importRequest(arrayBuffer(state)));
+    expect(response.status).toBe(200);
+    // A re-encoded state is byte-for-byte the imported one only when the
+    // original client ids and structs survive the import.
+    expect(await readStateBytes(harness)).toEqual(state);
+  });
+
+  it('rejects invalid bytes with 400 without changing the state or log', async () => {
+    const harness = setup([updateFrom('original')]);
+    expect(await readState(harness)).toBe('original');
+
+    const response = await harness.room.fetch(importRequest(arrayBuffer(new Uint8Array([255]))));
+    expect(response.status).toBe(400);
+    expect(await readState(harness)).toBe('original');
+    expect(harness.rows).toHaveLength(1);
+    expect(harness.snapshot()).toBeNull();
+  });
+
+  it('rejects oversized imports with 413 before reading the body', async () => {
+    const harness = setup([updateFrom('original')]);
+    const response = await harness.room.fetch(
+      importRequest(arrayBuffer(new Uint8Array([0, 0])), {
+        'content-length': String(5 * 1024 * 1024 + 1),
+      }),
+    );
+    expect(response.status).toBe(413);
+    expect(await readState(harness)).toBe('original');
+    expect(harness.rows).toHaveLength(1);
+  });
+
+  it('rejects an oversized streamed body even without a content-length header', async () => {
+    const harness = setup([updateFrom('original')]);
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array(5 * 1024 * 1024 + 1));
+        controller.close();
+      },
+    });
+    const init = {
+      method: 'POST',
+      headers: { 'x-zeee-user': 'user-1' },
+      body,
+      duplex: 'half',
+    } as unknown as RequestInit;
+    const response = await harness.room.fetch(
+      new Request('https://zeee.test/api/pages/page-1/import-state', init),
+    );
+    expect(response.status).toBe(413);
+    expect(await readState(harness)).toBe('original');
+    expect(harness.rows).toHaveLength(1);
   });
 });

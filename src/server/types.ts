@@ -6,6 +6,8 @@ export type Env = {
   EMOJI_SERVICE_URL?: string;
   EMOJI_ACCOUNT_PROFILE_URL?: string;
   PUBLIC_ORIGIN?: string;
+  /** Enable the migration-only POST /api/pages/:id/import-state endpoint. */
+  ZEEE_MIGRATION_IMPORT?: string;
 };
 
 export type PageSort = 'updated' | 'created' | 'title';

@@ -25,6 +25,8 @@ export default defineConfig({
         (process.env.CELLD_BUILD === '1'
           ? 'http://emoji.emoji.svc.cluster.local:3001/accounts'
           : ''),
+      // Disabled by default; set to '1' only for a migration deployment.
+      ZEEE_MIGRATION_IMPORT: '',
     },
     d1_databases: [
       {
